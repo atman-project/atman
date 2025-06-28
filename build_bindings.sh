@@ -15,3 +15,4 @@ lipo -info target/x86_64-apple-ios/debug/lib${PROJECT_NAME}.a
 lipo -create target/aarch64-apple-ios/debug/lib${PROJECT_NAME}.a \
     target/x86_64-apple-ios/debug/lib${PROJECT_NAME}.a \
     -output target/lib${PROJECT_NAME}.a
+lipo -info target/lib${PROJECT_NAME}.a
