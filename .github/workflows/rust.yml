@@ -15,9 +15,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
       - name: Build
         run: cargo build --verbose
+
+      - name: Build bindings
+        run: |
+          bash build_bindings.sh
+
       - name: Run tests
         run: cargo test --verbose
