@@ -1,0 +1,26 @@
+name: Binding
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["**"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add iOS targets
+        run: rustup target add aarch64-apple-ios x86_64-apple-ios
+
+      - name: Install cbindgen
+        run: cargo install --force cbindgen
+
+      - name: Build bindings
+        run: bash build_bindings.sh
