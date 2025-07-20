@@ -1,12 +1,12 @@
 [package]
-name = "atman-core"
+name = "atman"
 version = "0.1.0"
 authors = ["Youngjoon Lee"]
 edition = "2024"
-description = "Atman Core is a set of protocols that can be embedded into any desktop and mobile applications."
+description = "Atman is a set of protocols that can be embedded into any desktop and mobile applications."
 license = "Apache-2.0"
 homepage = "https://github.com/atman-project"
-repository = "https://github.com/atman-project/atman-core"
+repository = "https://github.com/atman-project/atman"
 readme = "README.md"
 
 [lib]

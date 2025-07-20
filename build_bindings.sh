@@ -2,7 +2,7 @@
 
 set -uexo pipefail
 
-PROJECT_NAME="atman_core"
+PROJECT_NAME="atman"
 
 cbindgen -l C -o target/${PROJECT_NAME}.h
 
