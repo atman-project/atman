@@ -1,4 +1,5 @@
 use tokio::sync::mpsc;
+use tracing::{debug, info};
 
 pub mod binding;
 
@@ -13,10 +14,10 @@ impl Atman {
     }
 
     async fn run(mut self) {
-        println!("Atman is running...");
+        info!("Atman is running...");
         loop {
             if let Some(message) = self.message_receiver.recv().await {
-                println!("Message received: {} bytes: {:?}", message.len(), message);
+                debug!("Message received: {} bytes: {:?}", message.len(), message);
             }
         }
     }
