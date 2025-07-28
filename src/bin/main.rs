@@ -31,7 +31,7 @@ enum Command {
 }
 
 async fn run(args: Args) -> Result<(), Error> {
-    let (atman, command_sender) = Atman::new()?;
+    let (atman, command_sender) = Atman::new();
     let atman_task = tokio::spawn(async move {
         if let Err(e) = atman.run().await {
             error!("Error from Atman: {e}");

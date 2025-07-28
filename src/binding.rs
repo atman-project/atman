@@ -37,7 +37,7 @@ static COMMAND_SENDER: OnceCell<mpsc::Sender<Command>> = OnceCell::new();
 
 async fn run() -> Result<(), Error> {
     info!("Initializing Atman...");
-    let (atman, command_sender) = Atman::new()?;
+    let (atman, command_sender) = Atman::new();
     COMMAND_SENDER
         .set(command_sender)
         .map_err(|_| Error::DoubleInit("COMMAND_SENDER".into()))?;
@@ -61,7 +61,6 @@ pub unsafe extern "C" fn send_atman_command(cmd: *const u8, len: usize) {
     match serde_json::from_slice::<Command>(cmd) {
         Err(e) => {
             error!("Failed to parse command from JSON: {e}");
-            return;
         }
         Ok(cmd) => match COMMAND_SENDER.get() {
             Some(sender) => {

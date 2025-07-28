@@ -62,11 +62,11 @@ impl Iroh {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Bind error: {0}")]
-    BindError(#[from] iroh::endpoint::BindError),
+    Bind(#[from] iroh::endpoint::BindError),
     #[error("Connect error: {0}")]
-    ConnectError(#[from] iroh::endpoint::ConnectError),
+    Connect(#[from] iroh::endpoint::ConnectError),
     #[error("Connection error: {0}")]
-    ConnectionError(#[from] iroh::endpoint::ConnectionError),
+    Connection(#[from] iroh::endpoint::ConnectionError),
 }
 
 #[derive(Debug, Clone)]

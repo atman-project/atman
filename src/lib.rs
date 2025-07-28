@@ -12,9 +12,9 @@ pub struct Atman {
 }
 
 impl Atman {
-    pub fn new() -> Result<(Self, mpsc::Sender<Command>), Error> {
+    pub fn new() -> (Self, mpsc::Sender<Command>) {
         let (command_sender, command_receiver) = mpsc::channel(100);
-        Ok((Self { command_receiver }, command_sender))
+        (Self { command_receiver }, command_sender)
     }
 
     pub async fn run(mut self) -> Result<(), Error> {
