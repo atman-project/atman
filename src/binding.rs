@@ -14,7 +14,7 @@ fn get_async_runtime() -> &'static Runtime {
 fn init_tracing_subscriber() {
     TRACING_SUBSCRIBER.get_or_init(|| {
         tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
+            .with_max_level(tracing::Level::INFO)
             // Disable ANSI colors since most envs where C bindings are used don't support them.
             .with_ansi(false)
             .init();
