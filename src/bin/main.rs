@@ -2,10 +2,12 @@ use atman::{Atman, Error};
 use clap::Parser;
 use iroh::NodeId;
 use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
         .with_max_level(tracing::Level::INFO)
         .init();
 
