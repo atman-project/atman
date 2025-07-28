@@ -2,7 +2,7 @@ use once_cell::sync::OnceCell;
 use tokio::{runtime::Runtime, sync::mpsc};
 use tracing::{debug, error, info};
 
-use crate::{Atman, Command, Error};
+use crate::{Atman, Command, Config, Error};
 
 static ASYNC_RUNTIME: OnceCell<Runtime> = OnceCell::new();
 static TRACING_SUBSCRIBER: OnceCell<()> = OnceCell::new();
@@ -37,7 +37,7 @@ static COMMAND_SENDER: OnceCell<mpsc::Sender<Command>> = OnceCell::new();
 
 async fn run() -> Result<(), Error> {
     info!("Initializing Atman...");
-    let (atman, command_sender) = Atman::new();
+    let (atman, command_sender) = Atman::new(Config { iroh_key: None });
     COMMAND_SENDER
         .set(command_sender)
         .map_err(|_| Error::DoubleInit("COMMAND_SENDER".into()))?;

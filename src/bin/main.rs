@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use atman::{Atman, Error};
 use clap::Parser;
 use iroh::NodeId;
@@ -21,19 +23,10 @@ async fn main() {
     }
 }
 
-#[derive(Debug, Parser)]
-struct Args {
-    #[clap(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Debug, Parser)]
-enum Command {
-    ConnectAndEcho { node_id: NodeId, payload: String },
-}
-
 async fn run(args: Args) -> Result<(), Error> {
-    let (atman, command_sender) = Atman::new();
+    let config = args.to_config()?;
+
+    let (atman, command_sender) = Atman::new(config);
     let atman_task = tokio::spawn(async move {
         if let Err(e) = atman.run().await {
             error!("Error from Atman: {e}");
@@ -58,4 +51,31 @@ async fn run(args: Args) -> Result<(), Error> {
         error!("Failed to wait until Atman is terminated: {e}");
     }
     Ok(())
+}
+
+#[derive(Debug, Parser)]
+struct Args {
+    #[clap(long)]
+    iroh_key: Option<String>,
+    #[clap(subcommand)]
+    command: Option<Command>,
+}
+
+impl Args {
+    fn to_config(&self) -> Result<atman::Config, Error> {
+        let iroh_key = match &self.iroh_key {
+            Some(key) => Some(
+                iroh::SecretKey::from_str(key.as_str())
+                    .map_err(|_| Error::InvalidConfig("Invalid Iroh key".to_string()))?,
+            ),
+            None => None,
+        };
+
+        Ok(atman::Config { iroh_key })
+    }
+}
+
+#[derive(Debug, Parser)]
+enum Command {
+    ConnectAndEcho { node_id: NodeId, payload: String },
 }

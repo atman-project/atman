@@ -1,5 +1,5 @@
 use iroh::{
-    Endpoint, NodeId, Watcher,
+    Endpoint, NodeId, SecretKey, Watcher,
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
 };
@@ -12,13 +12,18 @@ pub struct Iroh {
 }
 
 impl Iroh {
-    pub async fn new() -> Result<Self, Error> {
-        let endpoint = Endpoint::builder()
+    pub async fn new(key: Option<SecretKey>) -> Result<Self, Error> {
+        let mut builder = Endpoint::builder();
+        if let Some(key) = key {
+            builder = builder.secret_key(key);
+        }
+        let endpoint = builder
             .discovery_n0()
             .discovery_local_network()
             .alpns(vec![Echo::ALPN.to_vec()])
             .bind()
-            .await?;
+            .await
+            .map_err(|e| Error::Bind(Box::new(e)))?;
         let (event_sender, _) = broadcast::channel(128);
         let echo = Echo::new(event_sender.clone());
         let router = Router::builder(endpoint).accept(Echo::ALPN, echo).spawn();
@@ -62,7 +67,7 @@ impl Iroh {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Bind error: {0}")]
-    Bind(#[from] iroh::endpoint::BindError),
+    Bind(Box<dyn std::error::Error + Send + Sync>),
     #[error("Connect error: {0}")]
     Connect(#[from] iroh::endpoint::ConnectError),
     #[error("Connection error: {0}")]

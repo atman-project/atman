@@ -1,4 +1,4 @@
-use ::iroh::NodeId;
+use ::iroh::{NodeId, SecretKey};
 use iroh::Iroh;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -8,20 +8,27 @@ pub mod binding;
 mod iroh;
 
 pub struct Atman {
+    config: Config,
     command_receiver: mpsc::Receiver<Command>,
 }
 
 impl Atman {
-    pub fn new() -> (Self, mpsc::Sender<Command>) {
+    pub fn new(config: Config) -> (Self, mpsc::Sender<Command>) {
         let (command_sender, command_receiver) = mpsc::channel(100);
-        (Self { command_receiver }, command_sender)
+        (
+            Self {
+                config,
+                command_receiver,
+            },
+            command_sender,
+        )
     }
 
     pub async fn run(mut self) -> Result<(), Error> {
         info!("Atman is running...");
 
         info!("Iroh is starting...");
-        let iroh = Iroh::new().await?;
+        let iroh = Iroh::new(self.config.iroh_key).await?;
         info!("Iroh started");
 
         loop {
@@ -45,6 +52,13 @@ pub enum Error {
     Iroh(#[from] iroh::Error),
     #[error("Double initialization: {0}")]
     DoubleInit(String),
+    #[error("Invalid config: {0}")]
+    InvalidConfig(String),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Config {
+    pub iroh_key: Option<SecretKey>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
