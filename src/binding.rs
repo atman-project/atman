@@ -2,7 +2,7 @@ use once_cell::sync::OnceCell;
 use tokio::{runtime::Runtime, sync::mpsc};
 use tracing::{debug, error, info};
 
-use crate::Atman;
+use crate::{Atman, Command, Error};
 
 static ASYNC_RUNTIME: OnceCell<Runtime> = OnceCell::new();
 static TRACING_SUBSCRIBER: OnceCell<()> = OnceCell::new();
@@ -33,41 +33,47 @@ pub extern "C" fn run_atman() {
     });
 }
 
-static MESSAGE_SENDER: OnceCell<mpsc::Sender<Vec<u8>>> = OnceCell::new();
+static COMMAND_SENDER: OnceCell<mpsc::Sender<Command>> = OnceCell::new();
 
-async fn run() -> Result<(), String> {
+async fn run() -> Result<(), Error> {
     info!("Initializing Atman...");
-    let (atman, message_sender) = Atman::new()?;
-    MESSAGE_SENDER
-        .set(message_sender)
-        .map_err(|_| "failed to set MESSAGE_SENDER".to_string())?;
-    atman.run().await;
-    Ok(())
+    let (atman, command_sender) = Atman::new()?;
+    COMMAND_SENDER
+        .set(command_sender)
+        .map_err(|_| Error::DoubleInit("COMMAND_SENDER".into()))?;
+    atman.run().await
 }
 
-/// Send a message to Atman.
+/// Send a [`Command`] to Atman.
+/// This accepts a JSON-represented command as a byte array,
+/// converts it to a [`Command`], and sends it to Atman.
 ///
 /// # Safety
 /// `msg` must be a valid pointer to a byte array of length `len`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn send_atman_message(msg: *const u8, len: usize) {
-    // Convert msg to Vec<u8> for easier handling
-    if msg.is_null() {
+pub unsafe extern "C" fn send_atman_command(cmd: *const u8, len: usize) {
+    if cmd.is_null() {
         error!("Received null message pointer.");
         return;
     }
-    let msg = unsafe { std::slice::from_raw_parts(msg, len).to_vec() };
+    let cmd = unsafe { std::slice::from_raw_parts(cmd, len) };
 
-    match MESSAGE_SENDER.get() {
-        Some(sender) => {
-            if let Err(e) = sender.blocking_send(msg) {
-                error!("Failed to send message to Atman: {e}");
-            } else {
-                debug!("Message sent to Atman: {len} bytes");
+    match serde_json::from_slice::<Command>(cmd) {
+        Err(e) => {
+            error!("Failed to parse command from JSON: {e}");
+            return;
+        }
+        Ok(cmd) => match COMMAND_SENDER.get() {
+            Some(sender) => {
+                if let Err(e) = sender.blocking_send(cmd) {
+                    error!("Failed to send message to Atman: {e}");
+                } else {
+                    debug!("Message sent to Atman: {len} bytes");
+                }
             }
-        }
-        None => {
-            error!("Atman is not initialized. Please call run_atman first.");
-        }
+            None => {
+                error!("Atman is not initialized. Please call run_atman first.");
+            }
+        },
     }
 }

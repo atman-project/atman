@@ -1,24 +1,53 @@
+use ::iroh::NodeId;
+use iroh::Iroh;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 pub mod binding;
+mod iroh;
 
-struct Atman {
-    message_receiver: mpsc::Receiver<Vec<u8>>,
+pub struct Atman {
+    command_receiver: mpsc::Receiver<Command>,
 }
 
 impl Atman {
-    fn new() -> Result<(Self, mpsc::Sender<Vec<u8>>), String> {
-        let (message_sender, message_receiver) = mpsc::channel(100);
-        Ok((Self { message_receiver }, message_sender))
+    pub fn new() -> Result<(Self, mpsc::Sender<Command>), Error> {
+        let (command_sender, command_receiver) = mpsc::channel(100);
+        Ok((Self { command_receiver }, command_sender))
     }
 
-    async fn run(mut self) {
+    pub async fn run(mut self) -> Result<(), Error> {
         info!("Atman is running...");
+
+        info!("Iroh is starting...");
+        let iroh = Iroh::new().await?;
+        info!("Iroh started");
+
         loop {
-            if let Some(message) = self.message_receiver.recv().await {
-                debug!("Message received: {} bytes: {:?}", message.len(), message);
+            if let Some(cmd) = self.command_receiver.recv().await {
+                debug!("Command received: {:?}", cmd);
+                match cmd {
+                    Command::ConnectAndEcho { node_id, .. } => {
+                        if let Err(e) = iroh.connect(node_id).await {
+                            error!("failed to connect: {e}");
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Iroh error: {0}")]
+    Iroh(#[from] iroh::Error),
+    #[error("Double initialization: {0}")]
+    DoubleInit(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Command {
+    ConnectAndEcho { node_id: NodeId, payload: String },
 }
