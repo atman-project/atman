@@ -1,10 +1,15 @@
+use std::{io, time::Duration};
+
 use iroh::{
     Endpoint, NodeId, SecretKey, Watcher,
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
+use tokio::{
+    io::{AsyncReadExt as _, AsyncWriteExt as _},
+    sync::broadcast,
+};
 use tracing::{error, info};
 
 pub struct Iroh {
@@ -39,23 +44,46 @@ impl Iroh {
         let (mut send_stream, mut recv_stream) = conn.open_bi().await?;
         info!("Stream opened");
         tokio::spawn(async move {
-            info!("Writing data to stream");
-            if let Err(e) = send_stream.write_all(b"hello echo").await {
-                error!("Failed to send data: {e}");
+            for i in 0..10 {
+                info!("Writing data to stream: {i}");
+                let data = format!("Hello echo {i}");
+                if let Err(e) = send_stream.write_u64(data.len() as u64).await {
+                    error!("Failed to send data: {e}");
+                    return;
+                }
+                if let Err(e) = send_stream.write_all(data.as_bytes()).await {
+                    error!("Failed to send data: {e}");
+                    return;
+                }
+
+                info!("Reading data from stream");
+                match recv_stream.read_u64().await {
+                    Ok(len) => {
+                        info!("Received length: {len}");
+                        let mut buf = vec![0u8; len as usize];
+                        if let Err(e) = recv_stream.read_exact(&mut buf).await {
+                            error!("Failed to read stream: {e}");
+                            return;
+                        }
+                        info!("Received data: {:?}", String::from_utf8_lossy(&buf));
+                    }
+                    Err(e) => {
+                        error!("Failed to read length from stream: {e}");
+                        return;
+                    }
+                }
+            }
+
+            if let Err(e) = send_stream.write_u64(0).await {
+                error!("Failed to send final length: {e}");
                 return;
             }
+            info!("Sent final length");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
             if let Err(e) = send_stream.finish() {
                 error!("Failed to finish send_stream: {e}");
                 return;
-            }
-            info!("Reading data from stream");
-            match recv_stream.read_to_end(1024).await {
-                Ok(received) => {
-                    info!("Received data: {:?}", String::from_utf8_lossy(&received));
-                }
-                Err(e) => {
-                    error!("Failed to read stream: {e}");
-                }
             }
             info!("Closing conn");
             conn.close(1u8.into(), b"done");
@@ -72,6 +100,12 @@ pub enum Error {
     Connect(#[from] iroh::endpoint::ConnectError),
     #[error("Connection error: {0}")]
     Connection(#[from] iroh::endpoint::ConnectionError),
+    #[error("ReadExact error: {0}")]
+    ReadExact(#[from] iroh::endpoint::ReadExactError),
+    #[error("Write error: {0}")]
+    Write(#[from] iroh::endpoint::WriteError),
+    #[error("IO error: {0}")]
+    IO(#[from] io::Error),
 }
 
 #[derive(Debug, Clone)]
@@ -112,9 +146,10 @@ impl Echo {
         let (mut send, mut recv) = connection.accept_bi().await?;
         info!("Accepted stream");
 
-        // Echo any bytes received back directly.
-        let bytes_sent = tokio::io::copy(&mut recv, &mut send).await?;
-        info!("Copied over {bytes_sent} byte(s)");
+        if let Err(e) = Self::echo_back(&mut send, &mut recv).await {
+            error!("Failed to echo back: {e}");
+            return Err(AcceptError::from_err(e));
+        }
 
         // By calling `finish` on the send stream we signal that we will not send anything
         // further, which makes the receive stream on the other end terminate.
@@ -125,6 +160,25 @@ impl Echo {
         connection.closed().await;
         info!("Connection closed by remote");
         Ok(())
+    }
+
+    async fn echo_back(
+        send: &mut iroh::endpoint::SendStream,
+        recv: &mut iroh::endpoint::RecvStream,
+    ) -> Result<(), Error> {
+        loop {
+            // Read the length of the incoming message.
+            let len = recv.read_u64().await?;
+            if len == 0 {
+                info!("Received zero length");
+                return Ok(());
+            }
+            let mut buf = vec![0u8; len as usize];
+            recv.read_exact(&mut buf).await?;
+            info!("Echoing data back: {:?}", String::from_utf8_lossy(&buf));
+            send.write_u64(len).await?;
+            send.write_all(&buf).await?;
+        }
     }
 }
 
