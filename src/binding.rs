@@ -1,6 +1,6 @@
 use once_cell::sync::OnceCell;
 use tokio::{runtime::Runtime, sync::mpsc};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{Atman, Command, Config, Error};
 
@@ -75,4 +75,31 @@ pub unsafe extern "C" fn send_atman_command(cmd: *const u8, len: usize) {
             }
         },
     }
+}
+
+/// Send a [`SyncUpdateCommand`] to Atman.
+///
+/// # Safety
+/// all fields in [`SyncUpdateCommand`] must be valid pointers to byte arrays of the corresponding length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn send_atman_sync_update_command(cmd: SyncUpdateCommand) {
+    let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
+    let doc_id = unsafe { std::slice::from_raw_parts(cmd.doc_id, cmd.doc_id_len) };
+    let data = unsafe { std::slice::from_raw_parts(cmd.data, cmd.data_len) };
+    let cmd = crate::SyncUpdateCommand {
+        doc_space: String::from_utf8_lossy(doc_space).to_string().into(),
+        doc_id: String::from_utf8_lossy(doc_id).to_string().into(),
+        data: data.to_vec(),
+    };
+    warn!("{cmd:?}");
+}
+
+#[repr(C)]
+pub struct SyncUpdateCommand {
+    pub doc_space: *const u8,
+    pub doc_space_len: usize,
+    pub doc_id: *const u8,
+    pub doc_id_len: usize,
+    pub data: *const u8,
+    pub data_len: usize,
 }

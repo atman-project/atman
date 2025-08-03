@@ -40,6 +40,15 @@ impl Atman {
                             error!("failed to connect: {e}");
                         }
                     }
+                    Command::Sync(cmd) => match cmd {
+                        SyncCommand::Update(SyncUpdateCommand {
+                            doc_space,
+                            doc_id,
+                            data,
+                        }) => {
+                            info!("Syncing update for {doc_space:?}: {doc_id:?}: {data:?}",);
+                        }
+                    },
                 }
             }
         }
@@ -64,4 +73,43 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Command {
     ConnectAndEcho { node_id: NodeId, payload: String },
+    Sync(SyncCommand),
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SyncCommand {
+    Update(SyncUpdateCommand),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncUpdateCommand {
+    doc_space: DocSpace,
+    doc_id: DocId,
+    data: SerializedModel,
+}
+
+impl From<SyncUpdateCommand> for Command {
+    fn from(cmd: SyncUpdateCommand) -> Self {
+        Command::Sync(SyncCommand::Update(cmd))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DocSpace(String);
+
+impl From<String> for DocSpace {
+    fn from(space: String) -> Self {
+        DocSpace(space)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DocId(String);
+
+impl From<String> for DocId {
+    fn from(id: String) -> Self {
+        DocId(id)
+    }
+}
+
+type SerializedModel = Vec<u8>;
