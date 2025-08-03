@@ -1,24 +1,30 @@
 use ::iroh::{NodeId, SecretKey};
+use doc::{DocId, DocSpace, aviation::flight::Flight};
 use iroh::Iroh;
 use serde::{Deserialize, Serialize};
+use syncman::{Syncman, automerge::AutomergeSyncman};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 pub mod binding;
+pub mod doc;
 mod iroh;
 
 pub struct Atman {
     config: Config,
     command_receiver: mpsc::Receiver<Command>,
+    syncman: AutomergeSyncman,
 }
 
 impl Atman {
     pub fn new(config: Config) -> (Self, mpsc::Sender<Command>) {
+        let syncman = AutomergeSyncman::new();
         let (command_sender, command_receiver) = mpsc::channel(100);
         (
             Self {
                 config,
                 command_receiver,
+                syncman,
             },
             command_sender,
         )
@@ -47,6 +53,16 @@ impl Atman {
                             data,
                         }) => {
                             info!("Syncing update for {doc_space:?}: {doc_id:?}: {data:?}",);
+                            let flight: Flight = match serde_json::from_slice(&data) {
+                                Ok(flight) => flight,
+                                Err(e) => {
+                                    error!("Failed to deserialize Flight: {e}");
+                                    continue;
+                                }
+                            };
+                            info!("Flight received: {flight:?}");
+                            self.syncman.update(&flight);
+                            info!("Flight updated in syncman");
                         }
                     },
                 }
@@ -91,24 +107,6 @@ pub struct SyncUpdateCommand {
 impl From<SyncUpdateCommand> for Command {
     fn from(cmd: SyncUpdateCommand) -> Self {
         Command::Sync(SyncCommand::Update(cmd))
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DocSpace(String);
-
-impl From<String> for DocSpace {
-    fn from(space: String) -> Self {
-        DocSpace(space)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DocId(String);
-
-impl From<String> for DocId {
-    fn from(id: String) -> Self {
-        DocId(id)
     }
 }
 

@@ -2,7 +2,7 @@ use once_cell::sync::OnceCell;
 use tokio::{runtime::Runtime, sync::mpsc};
 use tracing::{debug, error, info, warn};
 
-use crate::{Atman, Command, Config, Error};
+use crate::{Atman, Command, Config, Error, SyncCommand};
 
 static ASYNC_RUNTIME: OnceCell<Runtime> = OnceCell::new();
 static TRACING_SUBSCRIBER: OnceCell<()> = OnceCell::new();
@@ -92,6 +92,19 @@ pub unsafe extern "C" fn send_atman_sync_update_command(cmd: SyncUpdateCommand) 
         data: data.to_vec(),
     };
     warn!("{cmd:?}");
+    warn!("DATA: {}", String::from_utf8_lossy(&cmd.data).to_string());
+    match COMMAND_SENDER.get() {
+        Some(sender) => {
+            if let Err(e) = sender.blocking_send(Command::Sync(SyncCommand::Update(cmd))) {
+                error!("Failed to send sync update command to Atman: {e}");
+            } else {
+                debug!("Sync update command sent to Atman");
+            }
+        }
+        None => {
+            error!("Atman is not initialized. Please call run_atman first.");
+        }
+    }
 }
 
 #[repr(C)]

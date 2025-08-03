@@ -182,6 +182,8 @@ name = "atman"
 version = "0.1.0"
 dependencies = [
  "actman",
+ "automerge",
+ "autosurgeon",
  "clap",
  "iroh",
  "once_cell",
@@ -192,6 +194,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -260,6 +263,7 @@ dependencies = [
  "autosurgeon-derive",
  "similar",
  "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]
