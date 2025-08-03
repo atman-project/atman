@@ -1,5 +1,5 @@
 use ::iroh::{NodeId, SecretKey};
-use doc::{DocId, DocSpace, aviation::flight::Flight};
+use doc::{DocId, DocResolver, DocSpace, Resolver as _};
 use iroh::Iroh;
 use serde::{Deserialize, Serialize};
 use syncman::{Syncman, automerge::AutomergeSyncman};
@@ -53,14 +53,7 @@ impl Atman {
                             data,
                         }) => {
                             info!("Syncing update for {doc_space:?}: {doc_id:?}: {data:?}",);
-                            let flight: Flight = match serde_json::from_slice(&data) {
-                                Ok(flight) => flight,
-                                Err(e) => {
-                                    error!("Failed to deserialize Flight: {e}");
-                                    continue;
-                                }
-                            };
-                            info!("Flight received: {flight:?}");
+                            let flight = DocResolver::deserialize(&doc_space, &doc_id, &data)?;
                             self.syncman.update(&flight);
                             info!("Flight updated in syncman");
                         }
@@ -79,6 +72,8 @@ pub enum Error {
     DoubleInit(String),
     #[error("Invalid config: {0}")]
     InvalidConfig(String),
+    #[error("Resolver error: {0}")]
+    Resolver(#[from] doc::Error),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
