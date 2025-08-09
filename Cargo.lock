@@ -3401,7 +3401,7 @@ dependencies = [
 [[package]]
 name = "syncman"
 version = "0.1.0"
-source = "git+https://github.com/atman-project/syncman#c968007d3193e3d7cfa204a897fca3a09bb1f7f0"
+source = "git+https://github.com/atman-project/syncman#577e47a6d4b30aafc09af7cfa8fd012141186959"
 dependencies = [
  "automerge",
  "autosurgeon",

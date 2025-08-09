@@ -1,5 +1,5 @@
 use ::iroh::{NodeId, SecretKey};
-use doc::{DocId, DocResolver, DocSpace, Resolver as _};
+use doc::{DocId, DocSpace, DocumentResolver};
 use iroh::Iroh;
 use serde::{Deserialize, Serialize};
 use syncman::{Syncman, automerge::AutomergeSyncman};
@@ -14,6 +14,7 @@ pub struct Atman {
     config: Config,
     command_receiver: mpsc::Receiver<Command>,
     syncman: AutomergeSyncman,
+    doc_resolver: DocumentResolver,
 }
 
 impl Atman {
@@ -25,6 +26,7 @@ impl Atman {
                 config,
                 command_receiver,
                 syncman,
+                doc_resolver: DocumentResolver::new(),
             },
             command_sender,
         )
@@ -53,8 +55,8 @@ impl Atman {
                             data,
                         }) => {
                             info!("Syncing update for {doc_space:?}: {doc_id:?}: {data:?}",);
-                            let flight = DocResolver::deserialize(&doc_space, &doc_id, &data)?;
-                            self.syncman.update(&flight);
+                            let doc = self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
+                            self.syncman.update(&doc);
                             info!("Flight updated in syncman");
                         }
                     },
