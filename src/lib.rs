@@ -3,8 +3,10 @@ use doc::{DocId, DocSpace, DocumentResolver};
 use iroh::Iroh;
 use serde::{Deserialize, Serialize};
 use syncman::{Syncman, automerge::AutomergeSyncman};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
+
+use crate::doc::Document;
 
 pub mod binding;
 pub mod doc;
@@ -14,7 +16,7 @@ pub struct Atman {
     config: Config,
     command_receiver: mpsc::Receiver<Command>,
     syncman: AutomergeSyncman,
-    doc_resolver: DocumentResolver,
+    doc_resolver: DocumentResolver<AutomergeSyncman>,
 }
 
 impl Atman {
@@ -48,18 +50,44 @@ impl Atman {
                             error!("failed to connect: {e}");
                         }
                     }
-                    Command::Sync(cmd) => match cmd {
-                        SyncCommand::Update(SyncUpdateCommand {
-                            doc_space,
-                            doc_id,
-                            data,
-                        }) => {
-                            info!("Syncing update for {doc_space:?}: {doc_id:?}: {data:?}",);
-                            let doc = self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
-                            self.syncman.update(&doc);
-                            info!("Flight updated in syncman");
+                    Command::Sync(cmd) => {
+                        info!("Command received: {cmd:?}");
+                        match cmd {
+                            SyncCommand::Update(SyncUpdateCommand {
+                                doc_space,
+                                doc_id,
+                                data,
+                            }) => {
+                                let doc =
+                                    self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
+                                self.syncman.update(&doc);
+                                info!("Document updated in syncman");
+                            }
+                            SyncCommand::ListInsert(SyncListInsertCommand {
+                                doc_space,
+                                doc_id,
+                                property,
+                                data,
+                                index,
+                            }) => {
+                                let doc =
+                                    self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
+                                let obj_id =
+                                    self.syncman.get_object_id(self.syncman.root(), property);
+                                self.syncman.insert(obj_id, index, &doc);
+                            }
+                            SyncCommand::Get {
+                                cmd: SyncGetCommand { doc_space, doc_id },
+                                reply_sender,
+                            } => {
+                                let doc = self
+                                    .doc_resolver
+                                    .hydrate(&doc_space, &doc_id, &self.syncman)
+                                    .unwrap();
+                                reply_sender.send(doc).unwrap();
+                            }
                         }
-                    },
+                    }
                 }
             }
         }
@@ -83,15 +111,20 @@ pub struct Config {
     pub iroh_key: Option<SecretKey>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug)]
 pub enum Command {
     ConnectAndEcho { node_id: NodeId, payload: String },
     Sync(SyncCommand),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug)]
 pub enum SyncCommand {
     Update(SyncUpdateCommand),
+    ListInsert(SyncListInsertCommand),
+    Get {
+        cmd: SyncGetCommand,
+        reply_sender: oneshot::Sender<Document>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,4 +140,119 @@ impl From<SyncUpdateCommand> for Command {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncListInsertCommand {
+    doc_space: DocSpace,
+    doc_id: DocId,
+    property: String,
+    data: SerializedModel,
+    index: usize,
+}
+
+impl From<SyncListInsertCommand> for Command {
+    fn from(cmd: SyncListInsertCommand) -> Self {
+        Command::Sync(SyncCommand::ListInsert(cmd))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncGetCommand {
+    doc_space: DocSpace,
+    doc_id: DocId,
+}
+
+impl From<SyncGetCommand> for (Command, oneshot::Receiver<Document>) {
+    fn from(cmd: SyncGetCommand) -> Self {
+        let (reply_sender, reply_receiver) = oneshot::channel();
+        (
+            Command::Sync(SyncCommand::Get { cmd, reply_sender }),
+            reply_receiver,
+        )
+    }
+}
+
 type SerializedModel = Vec<u8>;
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use crate::doc::{
+        Document,
+        aviation::{self, flight::Flight, flights::Flights},
+    };
+
+    use super::*;
+
+    #[test_log::test(tokio::test)]
+    async fn update() {
+        let (atman, command_sender) = Atman::new(Config { iroh_key: None });
+        tokio::spawn(async move {
+            atman.run().await.unwrap();
+        });
+
+        let mut flights = Flights {
+            flights: vec![Flight {
+                id: Uuid::new_v4(),
+                departure_airport: "ICN".into(),
+                arrival_airport: "SEA".into(),
+                departure_local_time: "2025-08-03T05:45:10Z".into(),
+                arrival_local_time: "2025-08-03T05:45:10Z".into(),
+                airline: "Korean Air".into(),
+                aircraft: "A350-900".into(),
+                flight_number: "KE1234".into(),
+                booking_reference: "ABCDEF".into(),
+            }],
+        };
+        let doc = Document::Flights(flights.clone());
+
+        command_sender
+            .send(
+                SyncUpdateCommand {
+                    doc_space: aviation::DOC_SPACE.into(),
+                    doc_id: aviation::flights::DOC_ID.into(),
+                    data: doc.serialize().unwrap(),
+                }
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let flight = Flight {
+            id: Uuid::new_v4(),
+            departure_airport: "LAX".into(),
+            arrival_airport: "JFK".into(),
+            departure_local_time: "2025-08-03T05:45:10Z".into(),
+            arrival_local_time: "2025-08-03T05:45:10Z".into(),
+            airline: "Delta Air Lines".into(),
+            aircraft: "B777-300".into(),
+            flight_number: "DL5678".into(),
+            booking_reference: "GHIJKL".into(),
+        };
+        let doc = Document::Flight(flight.clone());
+
+        command_sender
+            .send(
+                SyncListInsertCommand {
+                    doc_space: aviation::DOC_SPACE.into(),
+                    doc_id: aviation::flight::DOC_ID.into(),
+                    property: "flights".into(),
+                    index: 1,
+                    data: doc.serialize().unwrap(),
+                }
+                .into(),
+            )
+            .await
+            .unwrap();
+        flights.flights.push(flight);
+
+        let (cmd, reply_receiver) = SyncGetCommand {
+            doc_space: aviation::DOC_SPACE.into(),
+            doc_id: aviation::flights::DOC_ID.into(),
+        }
+        .into();
+        command_sender.send(cmd).await.unwrap();
+        let doc = reply_receiver.await.unwrap();
+        assert_eq!(doc, Document::Flights(flights));
+    }
+}

@@ -1,28 +1,17 @@
 use autosurgeon::{Hydrate, Reconcile};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-pub const DOC_ID: &str = "/flights";
+use super::flight::Flight;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Reconcile, Hydrate)]
-pub struct Flights(Vec<Flight>);
+pub const DOC_ID: &str = "flights";
 
-impl Flights {
-    pub fn iter(&self) -> impl Iterator<Item = &Flight> {
-        self.0.iter()
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, Reconcile, Hydrate, PartialEq, Eq)]
+pub struct Flights {
+    pub flights: Vec<Flight>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Reconcile, Hydrate)]
-#[serde(rename_all = "camelCase")]
-pub struct Flight {
-    id: Uuid,
-    departure_airport: String,
-    arrival_airport: String,
-    departure_local_time: String,
-    arrival_local_time: String,
-    airline: String,
-    aircraft: String,
-    flight_number: String,
-    booking_reference: String,
+impl Flights {
+    pub fn flights(&self) -> impl Iterator<Item = &Flight> {
+        self.flights.iter()
+    }
 }
