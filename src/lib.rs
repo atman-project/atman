@@ -72,9 +72,11 @@ impl Atman {
                             }) => {
                                 let doc =
                                     self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
-                                let obj_id =
-                                    self.syncman.get_object_id(self.syncman.root(), property);
+                                let obj_id = self
+                                    .syncman
+                                    .get_object_id(self.syncman.root(), property.clone());
                                 self.syncman.insert(obj_id, index, &doc);
+                                info!("Inserted into a list. prop:{property}, index:{index}")
                             }
                             SyncCommand::Get {
                                 cmd: SyncGetCommand { doc_space, doc_id },
