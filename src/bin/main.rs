@@ -3,6 +3,7 @@ use std::{path::PathBuf, str::FromStr};
 use atman::{Atman, Error};
 use clap::Parser;
 use iroh::NodeId;
+use tokio::sync::oneshot;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -27,11 +28,11 @@ async fn run(args: Args) -> Result<(), Error> {
     let config = args.to_config()?;
 
     let (atman, command_sender) = Atman::new(config)?;
-    let atman_task = tokio::spawn(async move {
-        if let Err(e) = atman.run().await {
-            error!("Error from Atman: {e}");
-        }
-    });
+    let (ready_sender, ready_receiver) = oneshot::channel();
+    let atman_task = tokio::spawn(async move { atman.run(ready_sender).await });
+    ready_receiver
+        .await
+        .expect("ready channel shouldn't be closed")?;
 
     if let Some(command) = args.command {
         match command {

@@ -37,12 +37,24 @@ impl Atman {
         ))
     }
 
-    pub async fn run(mut self) -> Result<(), Error> {
+    pub async fn run(mut self, ready_sender: oneshot::Sender<Result<(), Error>>) {
         info!("Atman is running...");
 
         info!("Iroh is starting...");
-        let iroh = Iroh::new(self.config.iroh_key.clone()).await?;
+        let iroh = match Iroh::new(self.config.iroh_key.clone()).await {
+            Ok(iroh) => iroh,
+            Err(e) => {
+                ready_sender
+                    .send(Err(e.into()))
+                    .expect("Failed to send ready error signal");
+                return;
+            }
+        };
         info!("Iroh started");
+
+        ready_sender
+            .send(Ok(()))
+            .expect("Failed to send ready signal");
 
         loop {
             if let Some(cmd) = self.command_receiver.recv().await {
@@ -60,29 +72,41 @@ impl Atman {
                                 doc_space,
                                 doc_id,
                                 data,
-                            }) => {
-                                let doc =
-                                    self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
-                                self.syncman.update(&doc);
-                                self.save_syncman()?;
-                                info!("Document updated in syncman");
-                            }
+                            }) => match self.doc_resolver.deserialize(&doc_space, &doc_id, &data) {
+                                Ok(doc) => {
+                                    self.syncman.update(&doc);
+                                    info!("Document updated in syncman");
+                                    if let Err(e) = self.save_syncman() {
+                                        error!("Failed to save syncman: {e}");
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to deserialize document: {e}");
+                                    continue;
+                                }
+                            },
                             SyncCommand::ListInsert(SyncListInsertCommand {
                                 doc_space,
                                 doc_id,
                                 property,
                                 data,
                                 index,
-                            }) => {
-                                let doc =
-                                    self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
-                                let obj_id = self
-                                    .syncman
-                                    .get_object_id(self.syncman.root(), property.clone());
-                                self.syncman.insert(obj_id, index, &doc);
-                                self.save_syncman()?;
-                                info!("Inserted into a list. prop:{property}, index:{index}")
-                            }
+                            }) => match self.doc_resolver.deserialize(&doc_space, &doc_id, &data) {
+                                Ok(doc) => {
+                                    let obj_id = self
+                                        .syncman
+                                        .get_object_id(self.syncman.root(), property.clone());
+                                    self.syncman.insert(obj_id, index, &doc);
+                                    info!("Inserted into a list. prop:{property}, index:{index}");
+                                    if let Err(e) = self.save_syncman() {
+                                        error!("Failed to save syncman: {e}");
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to deserialize document: {e}");
+                                    continue;
+                                }
+                            },
                             SyncCommand::Get {
                                 cmd: SyncGetCommand { doc_space, doc_id },
                                 reply_sender,
@@ -224,9 +248,14 @@ mod tests {
             syncman_dir: std::env::temp_dir().join("atman_test_syncman"),
         })
         .unwrap();
+        let (ready_sender, ready_receiver) = oneshot::channel();
         tokio::spawn(async move {
-            atman.run().await.unwrap();
+            atman.run(ready_sender).await;
         });
+        ready_receiver
+            .await
+            .expect("ready channel shouldn't be closed")
+            .expect("Atman should be ready successfully");
 
         let mut flights = Flights {
             flights: vec![Flight {

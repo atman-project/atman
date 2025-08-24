@@ -1,10 +1,13 @@
 use std::{
-    ffi::{CStr, c_char},
+    ffi::{CStr, c_char, c_ushort},
     path::PathBuf,
 };
 
 use once_cell::sync::OnceCell;
-use tokio::{runtime::Runtime, sync::mpsc};
+use tokio::{
+    runtime::Runtime,
+    sync::{mpsc, oneshot},
+};
 use tracing::{debug, error, info};
 
 use crate::{Atman, Command, Config, Error};
@@ -31,34 +34,52 @@ fn init_tracing_subscriber() {
 /// # Safety
 /// `syncman_dir` must be a valid null-terminated C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn run_atman(syncman_dir: *const c_char) {
+pub unsafe extern "C" fn run_atman(syncman_dir: *const c_char) -> c_ushort {
     init_tracing_subscriber();
+
+    if COMMAND_SENDER.get().is_some() {
+        error!("{:?}", Error::DoubleInit("Atman".into()));
+        return 1;
+    }
+
     let syncman_dir = unsafe { CStr::from_ptr(syncman_dir) }
         .to_str()
         .expect("Invalid UTF-8 string for syncman_dir")
         .to_string();
-    get_async_runtime().spawn(async {
-        if let Err(e) = run(syncman_dir).await {
-            error!("Failed to run Atman: {e}");
-        } else {
-            info!("Atman is terminated");
+
+    info!("Initializing Atman...");
+    let (atman, command_sender) = match Atman::new(Config {
+        iroh_key: None,
+        syncman_dir: PathBuf::from(syncman_dir),
+    }) {
+        Ok(result) => result,
+        Err(e) => {
+            error!("Failed to initialize Atman: {e}");
+            return 1;
         }
-    });
+    };
+    COMMAND_SENDER
+        .set(command_sender)
+        .expect("COMMAND_SENDER should be empty");
+
+    let (ready_sender, ready_receiver) = oneshot::channel();
+    get_async_runtime().spawn(async { atman.run(ready_sender).await });
+    match ready_receiver
+        .blocking_recv()
+        .expect("ready channel shouldn't be closed")
+    {
+        Ok(()) => {
+            info!("Atman is ready.");
+            0
+        }
+        Err(e) => {
+            error!("Failed to run Atman: {e}");
+            1
+        }
+    }
 }
 
 static COMMAND_SENDER: OnceCell<mpsc::Sender<Command>> = OnceCell::new();
-
-async fn run(syncman_dir: String) -> Result<(), Error> {
-    info!("Initializing Atman...");
-    let (atman, command_sender) = Atman::new(Config {
-        iroh_key: None,
-        syncman_dir: PathBuf::from(syncman_dir),
-    })?;
-    COMMAND_SENDER
-        .set(command_sender)
-        .map_err(|_| Error::DoubleInit("COMMAND_SENDER".into()))?;
-    atman.run().await
-}
 
 fn send_command(cmd: Command) {
     match COMMAND_SENDER.get() {
