@@ -37,7 +37,10 @@ static COMMAND_SENDER: OnceCell<mpsc::Sender<Command>> = OnceCell::new();
 
 async fn run() -> Result<(), Error> {
     info!("Initializing Atman...");
-    let (atman, command_sender) = Atman::new(Config { iroh_key: None });
+    let (atman, command_sender) = Atman::new(Config {
+        iroh_key: None,
+        syncman_dir: "./syncman".into(),
+    })?;
     COMMAND_SENDER
         .set(command_sender)
         .map_err(|_| Error::DoubleInit("COMMAND_SENDER".into()))?;

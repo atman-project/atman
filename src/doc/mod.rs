@@ -306,8 +306,16 @@ mod tests {
             unimplemented!()
         }
 
-        fn dump(&self) -> HashMap<String, String> {
+        fn to_map(&self) -> HashMap<String, String> {
             unimplemented!()
+        }
+
+        fn save(&mut self) -> Vec<u8> {
+            todo!()
+        }
+
+        fn load(_: &[u8]) -> Self {
+            todo!()
         }
     }
 

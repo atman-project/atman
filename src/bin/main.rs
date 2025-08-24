@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr};
 
 use atman::{Atman, Error};
 use clap::Parser;
@@ -26,7 +26,7 @@ async fn main() {
 async fn run(args: Args) -> Result<(), Error> {
     let config = args.to_config()?;
 
-    let (atman, command_sender) = Atman::new(config);
+    let (atman, command_sender) = Atman::new(config)?;
     let atman_task = tokio::spawn(async move {
         if let Err(e) = atman.run().await {
             error!("Error from Atman: {e}");
@@ -57,6 +57,8 @@ async fn run(args: Args) -> Result<(), Error> {
 struct Args {
     #[clap(long)]
     iroh_key: Option<String>,
+    #[clap(long)]
+    syncman_dir: String,
     #[clap(subcommand)]
     command: Option<Command>,
 }
@@ -71,7 +73,10 @@ impl Args {
             None => None,
         };
 
-        Ok(atman::Config { iroh_key })
+        Ok(atman::Config {
+            iroh_key,
+            syncman_dir: PathBuf::from(&self.syncman_dir),
+        })
     }
 }
 

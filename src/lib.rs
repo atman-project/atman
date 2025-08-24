@@ -2,6 +2,7 @@ use ::iroh::{NodeId, SecretKey};
 use doc::{DocId, DocSpace, DocumentResolver};
 use iroh::Iroh;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use syncman::{Syncman, automerge::AutomergeSyncman};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
@@ -20,10 +21,12 @@ pub struct Atman {
 }
 
 impl Atman {
-    pub fn new(config: Config) -> (Self, mpsc::Sender<Command>) {
+    pub fn new(config: Config) -> Result<(Self, mpsc::Sender<Command>), Error> {
+        config.create_dirs()?;
+
         let syncman = AutomergeSyncman::new();
         let (command_sender, command_receiver) = mpsc::channel(100);
-        (
+        Ok((
             Self {
                 config,
                 command_receiver,
@@ -31,14 +34,14 @@ impl Atman {
                 doc_resolver: DocumentResolver::new(),
             },
             command_sender,
-        )
+        ))
     }
 
     pub async fn run(mut self) -> Result<(), Error> {
         info!("Atman is running...");
 
         info!("Iroh is starting...");
-        let iroh = Iroh::new(self.config.iroh_key).await?;
+        let iroh = Iroh::new(self.config.iroh_key.clone()).await?;
         info!("Iroh started");
 
         loop {
@@ -61,6 +64,7 @@ impl Atman {
                                 let doc =
                                     self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
                                 self.syncman.update(&doc);
+                                self.save_syncman()?;
                                 info!("Document updated in syncman");
                             }
                             SyncCommand::ListInsert(SyncListInsertCommand {
@@ -76,6 +80,7 @@ impl Atman {
                                     .syncman
                                     .get_object_id(self.syncman.root(), property.clone());
                                 self.syncman.insert(obj_id, index, &doc);
+                                self.save_syncman()?;
                                 info!("Inserted into a list. prop:{property}, index:{index}")
                             }
                             SyncCommand::Get {
@@ -94,6 +99,15 @@ impl Atman {
             }
         }
     }
+
+    fn save_syncman(&mut self) -> Result<(), Error> {
+        let path = self.config.syncman_dir.join("syncman.dat");
+        let data = self.syncman.save();
+        std::fs::write(&path, data)
+            .map_err(|e| Error::InvalidConfig(format!("Failed to save syncman: {e}")))?;
+        debug!("Syncman saved to {path:?}");
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -106,11 +120,28 @@ pub enum Error {
     InvalidConfig(String),
     #[error("Resolver error: {0}")]
     Resolver(#[from] doc::Error),
+    #[error("IO error: {message}: {cause}")]
+    IO {
+        message: String,
+        cause: std::io::Error,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub iroh_key: Option<SecretKey>,
+    pub syncman_dir: PathBuf,
+}
+
+impl Config {
+    fn create_dirs(&self) -> Result<(), Error> {
+        std::fs::create_dir_all(&self.syncman_dir).map_err(|e| Error::IO {
+            message: "Failed to create syncman directory".to_string(),
+            cause: e,
+        })?;
+        info!("Created (or checked) syncman dir: {:?}", self.syncman_dir);
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -188,7 +219,11 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn update() {
-        let (atman, command_sender) = Atman::new(Config { iroh_key: None });
+        let (atman, command_sender) = Atman::new(Config {
+            iroh_key: None,
+            syncman_dir: std::env::temp_dir().join("atman_test_syncman"),
+        })
+        .unwrap();
         tokio::spawn(async move {
             atman.run().await.unwrap();
         });
