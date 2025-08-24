@@ -1,3 +1,8 @@
+use std::{
+    ffi::{CStr, c_char},
+    path::PathBuf,
+};
+
 use once_cell::sync::OnceCell;
 use tokio::{runtime::Runtime, sync::mpsc};
 use tracing::{debug, error, info};
@@ -22,10 +27,14 @@ fn init_tracing_subscriber() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn run_atman() {
+pub extern "C" fn run_atman(syncman_dir: *const c_char) {
     init_tracing_subscriber();
+    let syncman_dir = unsafe { CStr::from_ptr(syncman_dir) }
+        .to_str()
+        .expect("Invalid UTF-8 string for syncman_dir")
+        .to_string();
     get_async_runtime().spawn(async {
-        if let Err(e) = run().await {
+        if let Err(e) = run(syncman_dir).await {
             error!("Failed to run Atman: {e}");
         } else {
             info!("Atman is terminated");
@@ -35,11 +44,11 @@ pub extern "C" fn run_atman() {
 
 static COMMAND_SENDER: OnceCell<mpsc::Sender<Command>> = OnceCell::new();
 
-async fn run() -> Result<(), Error> {
+async fn run(syncman_dir: String) -> Result<(), Error> {
     info!("Initializing Atman...");
     let (atman, command_sender) = Atman::new(Config {
         iroh_key: None,
-        syncman_dir: "./syncman".into(),
+        syncman_dir: PathBuf::from(syncman_dir),
     })?;
     COMMAND_SENDER
         .set(command_sender)
