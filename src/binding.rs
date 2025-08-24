@@ -26,8 +26,12 @@ fn init_tracing_subscriber() {
     });
 }
 
+/// Initialize and run Atman with the given syncman directory.
+///
+/// # Safety
+/// `syncman_dir` must be a valid null-terminated C string.
 #[unsafe(no_mangle)]
-pub extern "C" fn run_atman(syncman_dir: *const c_char) {
+pub unsafe extern "C" fn run_atman(syncman_dir: *const c_char) {
     init_tracing_subscriber();
     let syncman_dir = unsafe { CStr::from_ptr(syncman_dir) }
         .to_str()
