@@ -62,6 +62,8 @@ struct Args {
     syncman_dir: String,
     #[clap(subcommand)]
     command: Option<Command>,
+    #[clap(long, default_value_t = false)]
+    overwrite: bool,
 }
 
 impl Args {
@@ -77,6 +79,7 @@ impl Args {
         Ok(atman::Config {
             iroh_key,
             syncman_dir: PathBuf::from(&self.syncman_dir),
+            overwrite: self.overwrite,
         })
     }
 }

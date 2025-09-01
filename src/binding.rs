@@ -51,6 +51,7 @@ pub unsafe extern "C" fn run_atman(syncman_dir: *const c_char) -> c_ushort {
     let (atman, command_sender) = match Atman::new(Config {
         iroh_key: None,
         syncman_dir: PathBuf::from(syncman_dir),
+        overwrite: false,
     }) {
         Ok(result) => result,
         Err(e) => {

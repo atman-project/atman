@@ -24,7 +24,15 @@ impl Atman {
     pub fn new(config: Config) -> Result<(Self, mpsc::Sender<Command>), Error> {
         config.create_dirs()?;
 
-        let syncman = AutomergeSyncman::new();
+        let path = config.syncman_path();
+        let syncman = if !path.exists() || config.overwrite {
+            let mut syncman = AutomergeSyncman::new();
+            save_syncman(&mut syncman, &path)?;
+            syncman
+        } else {
+            load_syncman(&path)?
+        };
+
         let (command_sender, command_receiver) = mpsc::channel(100);
         Ok((
             Self {
@@ -76,8 +84,8 @@ impl Atman {
                                 Ok(doc) => {
                                     self.syncman.update(&doc);
                                     info!("Document updated in syncman");
-                                    if let Err(e) = self.save_syncman() {
-                                        error!("Failed to save syncman: {e}");
+                                    if let Err(e) = self.save() {
+                                        error!("Failed to save atman: {e}");
                                     }
                                 }
                                 Err(e) => {
@@ -98,8 +106,8 @@ impl Atman {
                                         .get_object_id(self.syncman.root(), property.clone());
                                     self.syncman.insert(obj_id, index, &doc);
                                     info!("Inserted into a list. prop:{property}, index:{index}");
-                                    if let Err(e) = self.save_syncman() {
-                                        error!("Failed to save syncman: {e}");
+                                    if let Err(e) = self.save() {
+                                        error!("Failed to save atman: {e}");
                                     }
                                 }
                                 Err(e) => {
@@ -124,14 +132,27 @@ impl Atman {
         }
     }
 
-    fn save_syncman(&mut self) -> Result<(), Error> {
-        let path = self.config.syncman_dir.join("syncman.dat");
-        let data = self.syncman.save();
-        std::fs::write(&path, data)
-            .map_err(|e| Error::InvalidConfig(format!("Failed to save syncman: {e}")))?;
-        debug!("Syncman saved to {path:?}");
-        Ok(())
+    fn save(&mut self) -> Result<(), Error> {
+        save_syncman(&mut self.syncman, &self.config.syncman_path())
     }
+}
+
+fn save_syncman(syncman: &mut AutomergeSyncman, path: &PathBuf) -> Result<(), Error> {
+    let data = syncman.save();
+    std::fs::write(path, data).map_err(|e| Error::IO {
+        message: format!("Failed to write syncman file at {path:?}"),
+        cause: e,
+    })?;
+    debug!("Syncman saved to {path:?}");
+    Ok(())
+}
+
+fn load_syncman(path: &PathBuf) -> Result<AutomergeSyncman, Error> {
+    let data = std::fs::read(path).map_err(|e| Error::IO {
+        message: format!("Failed to read syncman file at {path:?}"),
+        cause: e,
+    })?;
+    Ok(AutomergeSyncman::load(&data))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -151,10 +172,11 @@ pub enum Error {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub iroh_key: Option<SecretKey>,
     pub syncman_dir: PathBuf,
+    pub overwrite: bool,
 }
 
 impl Config {
@@ -165,6 +187,10 @@ impl Config {
         })?;
         info!("Created (or checked) syncman dir: {:?}", self.syncman_dir);
         Ok(())
+    }
+
+    fn syncman_path(&self) -> PathBuf {
+        self.syncman_dir.join("syncman.dat")
     }
 }
 
@@ -232,6 +258,12 @@ type SerializedModel = Vec<u8>;
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        env::temp_dir,
+        thread::sleep,
+        time::{Duration, SystemTime},
+    };
+
     use uuid::Uuid;
 
     use crate::doc::{
@@ -241,11 +273,32 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn test_new() {
+        let mut config = Config {
+            iroh_key: None,
+            syncman_dir: temp_dir().join("atman_test_syncman"),
+            overwrite: false,
+        };
+        let _ = Atman::new(config.clone()).unwrap();
+        // Check if the syncman has been saved.
+        assert!(config.syncman_path().exists());
+        let file_time = mtime(&config.syncman_path());
+
+        // Recreate Atman with overwrite and check if the syncman file is updated.
+        config.overwrite = true;
+        sleep(Duration::from_millis(1)); // Ensure the mtime will be different.
+        let _ = Atman::new(config.clone()).unwrap();
+        assert!(config.syncman_path().exists());
+        assert_ne!(mtime(&config.syncman_path()), file_time);
+    }
+
     #[test_log::test(tokio::test)]
     async fn update() {
         let (atman, command_sender) = Atman::new(Config {
             iroh_key: None,
-            syncman_dir: std::env::temp_dir().join("atman_test_syncman"),
+            syncman_dir: temp_dir().join("atman_test_syncman"),
+            overwrite: false,
         })
         .unwrap();
         let (ready_sender, ready_receiver) = oneshot::channel();
@@ -320,5 +373,9 @@ mod tests {
         command_sender.send(cmd).await.unwrap();
         let doc = reply_receiver.await.unwrap();
         assert_eq!(doc, Document::Flights(flights));
+    }
+
+    fn mtime(path: &PathBuf) -> SystemTime {
+        std::fs::metadata(path).unwrap().modified().unwrap()
     }
 }
