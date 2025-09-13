@@ -100,7 +100,8 @@ fn send_command(cmd: Command) {
 /// Send a [`SyncUpdateCommand`] to Atman.
 ///
 /// # Safety
-/// all fields in [`SyncUpdateCommand`] must be valid pointers to byte arrays of the corresponding length.
+/// all fields in [`SyncUpdateCommand`] must be valid pointers to byte arrays of
+/// the corresponding length.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_sync_update_command(cmd: SyncUpdateCommand) {
     let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
@@ -127,7 +128,8 @@ pub struct SyncUpdateCommand {
 /// Send a [`SyncListInsertCommand`] to Atman.
 ///
 /// # Safety
-/// all fields in [`SyncListInsertCommand`] must be valid pointers to byte arrays of the corresponding length.
+/// all fields in [`SyncListInsertCommand`] must be valid pointers to byte
+/// arrays of the corresponding length.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_sync_list_insert_command(cmd: SyncListInsertCommand) {
     let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
