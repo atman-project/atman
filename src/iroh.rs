@@ -151,8 +151,9 @@ impl Echo {
             return Err(AcceptError::from_err(e));
         }
 
-        // By calling `finish` on the send stream we signal that we will not send anything
-        // further, which makes the receive stream on the other end terminate.
+        // By calling `finish` on the send stream we signal that we will not send
+        // anything further, which makes the receive stream on the other end
+        // terminate.
         send.finish()?;
 
         // Wait until the remote closes the connection, which it does once it
@@ -185,8 +186,8 @@ impl Echo {
 impl ProtocolHandler for Echo {
     /// The `accept` method is called for each incoming connection for our ALPN.
     ///
-    /// The returned future runs on a newly spawned tokio task, so it can run as long as
-    /// the connection lasts.
+    /// The returned future runs on a newly spawned tokio task, so it can run as
+    /// long as the connection lasts.
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
         self.clone().handle_connection(connection).await
     }

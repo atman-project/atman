@@ -1,8 +1,9 @@
+use std::path::PathBuf;
+
 use ::iroh::{NodeId, SecretKey};
 use doc::{DocId, DocSpace, DocumentResolver};
 use iroh::Iroh;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use syncman::{Syncman, automerge::AutomergeSyncman};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
@@ -266,12 +267,11 @@ mod tests {
 
     use uuid::Uuid;
 
+    use super::*;
     use crate::doc::{
         Document,
         aviation::{self, flight::Flight, flights::Flights},
     };
-
-    use super::*;
 
     #[test]
     fn test_new() {

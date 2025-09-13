@@ -1,4 +1,14 @@
 repos:
+
+  # Format
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        entry: cargo +nightly fmt --all
+        # Disable passing staged filenames one by one for consistent result
+        pass_filenames: false
+
   # Check unused deps
   - repo: https://github.com/bnjbvr/cargo-machete
     rev: v0.9.1
