@@ -34,6 +34,12 @@ jobs:
           override: true
       - name: Rustfmt
         run: cargo fmt --all --check
+      - name: Install taplo
+        run: cargo install taplo-cli --locked --version 0.9.3
+      - name: Run taplo fmt
+        run: taplo fmt --check
+      - name: Run taplo lint
+        run: taplo lint
 
   lints:
     name: Lints
