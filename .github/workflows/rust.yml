@@ -20,6 +20,21 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the latest nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          components: rustfmt
+          override: true
+      - name: Rustfmt
+        run: cargo fmt --all --check
+
   lints:
     name: Lints
     runs-on: ubuntu-latest
