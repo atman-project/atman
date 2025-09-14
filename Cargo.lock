@@ -3,17 +3,6 @@
 version = 4
 
 [[package]]
-name = "actman"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6000e6caf038624583384bea15039ab7b3f60b9ad4fb9509b57b1a3f8310d55"
-dependencies = [
- "async-trait",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "acto"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -181,7 +170,6 @@ dependencies = [
 name = "atman"
 version = "0.1.0"
 dependencies = [
- "actman",
  "automerge",
  "autosurgeon",
  "clap",
