@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr};
 
-use atman::{Atman, Error};
+use atman::{Atman, Error, NetworkConfig, SyncConfig};
 use clap::Parser;
 use iroh::NodeId;
 use tokio::sync::oneshot;
@@ -37,9 +37,18 @@ async fn run(args: Args) -> Result<(), Error> {
     if let Some(command) = args.command {
         match command {
             Command::ConnectAndEcho { node_id, payload } => {
-                info!("Connecting to node: {node_id} with payload: {payload}");
+                info!("Connecting to node {node_id} with payload: {payload}");
                 if let Err(e) = command_sender
                     .send(atman::Command::ConnectAndEcho { node_id, payload })
+                    .await
+                {
+                    error!("Channel send error: {e}");
+                }
+            }
+            Command::ConnectAndSync { node_id } => {
+                info!("Connecting to node {node_id} to sync");
+                if let Err(e) = command_sender
+                    .send(atman::Command::ConnectAndSync { node_id })
                     .await
                 {
                     error!("Channel send error: {e}");
@@ -77,9 +86,11 @@ impl Args {
         };
 
         Ok(atman::Config {
-            iroh_key,
-            syncman_dir: PathBuf::from(&self.syncman_dir),
-            overwrite: self.overwrite,
+            network: NetworkConfig { key: iroh_key },
+            sync: SyncConfig {
+                syncman_dir: PathBuf::from(&self.syncman_dir),
+                overwrite: self.overwrite,
+            },
         })
     }
 }
@@ -87,4 +98,5 @@ impl Args {
 #[derive(Debug, Parser)]
 enum Command {
     ConnectAndEcho { node_id: NodeId, payload: String },
+    ConnectAndSync { node_id: NodeId },
 }
