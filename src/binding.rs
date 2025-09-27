@@ -10,7 +10,10 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-use crate::{Atman, Command, Config, Error};
+use crate::{
+    Atman, Command, Config, Error,
+    actors::{network, sync},
+};
 
 static ASYNC_RUNTIME: OnceCell<Runtime> = OnceCell::new();
 static TRACING_SUBSCRIBER: OnceCell<()> = OnceCell::new();
@@ -49,9 +52,11 @@ pub unsafe extern "C" fn run_atman(syncman_dir: *const c_char) -> c_ushort {
 
     info!("Initializing Atman...");
     let (atman, command_sender) = match Atman::new(Config {
-        iroh_key: None,
-        syncman_dir: PathBuf::from(syncman_dir),
-        overwrite: false,
+        network: network::Config { key: None },
+        sync: sync::Config {
+            syncman_dir: PathBuf::from(syncman_dir),
+            overwrite: false,
+        },
     }) {
         Ok(result) => result,
         Err(e) => {
@@ -107,12 +112,14 @@ pub unsafe extern "C" fn send_atman_sync_update_command(cmd: SyncUpdateCommand) 
     let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
     let doc_id = unsafe { std::slice::from_raw_parts(cmd.doc_id, cmd.doc_id_len) };
     let data = unsafe { std::slice::from_raw_parts(cmd.data, cmd.data_len) };
-    let cmd = crate::SyncUpdateCommand {
-        doc_space: String::from_utf8_lossy(doc_space).to_string().into(),
-        doc_id: String::from_utf8_lossy(doc_id).to_string().into(),
-        data: data.to_vec(),
-    };
-    send_command(cmd.into());
+    send_command(Command::Sync(
+        crate::actors::sync::UpdateMessage {
+            doc_space: String::from_utf8_lossy(doc_space).to_string().into(),
+            doc_id: String::from_utf8_lossy(doc_id).to_string().into(),
+            data: data.to_vec(),
+        }
+        .into(),
+    ));
 }
 
 #[repr(C)]
@@ -136,14 +143,16 @@ pub unsafe extern "C" fn send_atman_sync_list_insert_command(cmd: SyncListInsert
     let doc_id = unsafe { std::slice::from_raw_parts(cmd.doc_id, cmd.doc_id_len) };
     let property = unsafe { std::slice::from_raw_parts(cmd.property, cmd.property_len) };
     let data = unsafe { std::slice::from_raw_parts(cmd.data, cmd.data_len) };
-    let cmd = crate::SyncListInsertCommand {
-        doc_space: String::from_utf8_lossy(doc_space).to_string().into(),
-        doc_id: String::from_utf8_lossy(doc_id).to_string().into(),
-        property: String::from_utf8_lossy(property).to_string(),
-        data: data.to_vec(),
-        index: cmd.index,
-    };
-    send_command(cmd.into());
+    send_command(Command::Sync(
+        crate::actors::sync::ListInsertMessage {
+            doc_space: String::from_utf8_lossy(doc_space).to_string().into(),
+            doc_id: String::from_utf8_lossy(doc_id).to_string().into(),
+            property: String::from_utf8_lossy(property).to_string(),
+            data: data.to_vec(),
+            index: cmd.index,
+        }
+        .into(),
+    ));
 }
 
 #[repr(C)]

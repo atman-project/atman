@@ -1,0 +1,139 @@
+mod protocols;
+
+use std::io;
+
+use iroh::{Endpoint, NodeId, SecretKey, Watcher as _, protocol::Router};
+use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
+use tracing::{debug, error, info, warn};
+
+use crate::actors::network::protocols::{echo, sync};
+
+pub struct Actor {
+    router: Router,
+    sync_actor_handle: actman::Handle<crate::sync::Actor>,
+    echo_event_sender: broadcast::Sender<echo::Event>,
+    sync_event_sender: broadcast::Sender<sync::Event>,
+}
+
+#[async_trait::async_trait]
+impl actman::Actor for Actor {
+    type Message = Message;
+
+    async fn run(self, mut state: actman::State<Self>) {
+        let mut echo_event_receiver = self.echo_event_sender.subscribe();
+        let mut sync_event_receiver = self.sync_event_sender.subscribe();
+        loop {
+            tokio::select! {
+                Some(message) = state.message_receiver.recv() => {
+                    if let Err(e) = self.handle_message(message).await {
+                        error!("Failed to handle message: {e:?}");
+                    }
+                }
+                Some(ctrl) = state.control_receiver.recv() => {
+                    match ctrl {
+                        actman::Control::Shutdown => {
+                            info!("Actor received shutdown control.");
+                            return;
+                        },
+                    }
+                }
+                Ok(event) = echo_event_receiver.recv() => {
+                    debug!("Echo event: {event:?}");
+                }
+                Ok(event) = sync_event_receiver.recv() => {
+                    debug!("Echo event: {event:?}");
+                }
+                else => {
+                    warn!("All channels closed, terminating actor.");
+                    return;
+                }
+            }
+        }
+    }
+}
+
+impl Actor {
+    pub async fn new(
+        config: &Config,
+        sync_actor_handle: actman::Handle<crate::sync::Actor>,
+    ) -> Result<Self, Error> {
+        let mut builder = Endpoint::builder();
+        if let Some(key) = &config.key {
+            builder = builder.secret_key(key.clone());
+        }
+        let endpoint = builder
+            .discovery_n0()
+            .discovery_local_network()
+            .alpns(vec![
+                echo::Protocol::ALPN.to_vec(),
+                sync::Protocol::ALPN.to_vec(),
+            ])
+            .bind()
+            .await
+            .map_err(|e| Error::Bind(Box::new(e)))?;
+        let (echo_event_sender, _) = broadcast::channel(128);
+        let echo = echo::Protocol::new(echo_event_sender.clone());
+        let (sync_event_sender, _) = broadcast::channel(128);
+        let sync = sync::Protocol::new(sync_event_sender.clone(), sync_actor_handle.clone());
+        let router = Router::builder(endpoint)
+            .accept(echo::Protocol::ALPN, echo)
+            .accept(sync::Protocol::ALPN, sync)
+            .spawn();
+        match router.endpoint().node_addr().initialized().await {
+            Ok(addr) => info!("Node address initialized: {addr:?}"),
+            Err(e) => error!("Failed to watch for node address to be initialized: {e:?}"),
+        }
+        Ok(Self {
+            router,
+            sync_actor_handle,
+            echo_event_sender,
+            sync_event_sender,
+        })
+    }
+
+    async fn handle_message(&self, message: Message) -> Result<(), Error> {
+        match message {
+            Message::Echo(node_id) => self.handle_echo_message(node_id).await,
+            Message::Sync(node_id) => self.handle_sync_message(node_id).await,
+        }
+    }
+
+    async fn handle_echo_message(&self, node_id: NodeId) -> Result<(), Error> {
+        debug!("Handling Echo message to {node_id}");
+        echo::Protocol::connect_and_spawn(node_id, &self.router).await
+    }
+
+    async fn handle_sync_message(&self, node_id: NodeId) -> Result<(), Error> {
+        debug!("Handling Sync message to {node_id}");
+        sync::Protocol::connect_and_spawn(node_id, &self.router, &self.sync_actor_handle).await
+    }
+}
+
+pub enum Message {
+    Echo(NodeId),
+    Sync(NodeId),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    pub key: Option<SecretKey>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Bind error: {0}")]
+    Bind(Box<dyn std::error::Error + Send + Sync>),
+    #[error("Connect error: {0}")]
+    Connect(#[from] iroh::endpoint::ConnectError),
+    #[error("Connection error: {0}")]
+    Connection(#[from] iroh::endpoint::ConnectionError),
+    #[error("ReadExact error: {0}")]
+    ReadExact(#[from] iroh::endpoint::ReadExactError),
+    #[error("Write error: {0}")]
+    Write(#[from] iroh::endpoint::WriteError),
+    #[error("IO error: {0}")]
+    IO(#[from] io::Error),
+    #[error("Sync network error")]
+    SyncNetwork,
+}
