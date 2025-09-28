@@ -30,9 +30,7 @@ impl actman::Actor for Actor {
         loop {
             tokio::select! {
                 Some(message) = state.message_receiver.recv() => {
-                    if let Err(e) = self.handle_message(message).await {
-                        error!("Failed to handle message: {e:?}");
-                    }
+                    self.handle_message(message)
                 }
                 Some(ctrl) = state.control_receiver.recv() => {
                     match ctrl {
@@ -71,26 +69,39 @@ impl Actor {
         })
     }
 
-    async fn handle_message(&mut self, message: Message) -> Result<(), Error> {
+    fn handle_message(&mut self, message: Message) {
         match message {
-            Message::Update(msg) => self.handle_update_message(msg).await,
-            Message::ListInsert(msg) => self.handle_list_insert_message(msg).await,
-            Message::Get { msg, reply_sender } => self.handle_get_message(msg, reply_sender).await,
+            Message::Update { msg, reply_sender } => self.handle_update_message(msg, reply_sender),
+            Message::ListInsert { msg, reply_sender } => {
+                self.handle_list_insert_message(msg, reply_sender)
+            }
+
+            Message::Get { msg, reply_sender } => self.handle_get_message(msg, reply_sender),
             Message::InitiateSync { reply_sender } => {
-                self.handle_initiate_sync_message(reply_sender).await
+                self.handle_initiate_sync_message(reply_sender)
             }
             Message::ApplySync {
                 data,
                 handle,
                 reply_sender,
-            } => {
-                self.handle_apply_sync_message(data, handle, reply_sender)
-                    .await
-            }
+            } => self.handle_apply_sync_message(data, handle, reply_sender),
         }
     }
 
-    async fn handle_update_message(
+    fn handle_update_message(
+        &mut self,
+        msg: UpdateMessage,
+        reply_sender: oneshot::Sender<Result<(), Error>>,
+    ) {
+        let _ = reply_sender
+            .send(
+                self.handle_update_message_inner(msg)
+                    .inspect_err(|e| error!("Failed to handle update message: {e:?}")),
+            )
+            .inspect_err(|_| error!("Failed to send reply"));
+    }
+
+    fn handle_update_message_inner(
         &mut self,
         UpdateMessage {
             doc_space,
@@ -104,7 +115,20 @@ impl Actor {
         self.save()
     }
 
-    async fn handle_list_insert_message(
+    fn handle_list_insert_message(
+        &mut self,
+        msg: ListInsertMessage,
+        reply_sender: oneshot::Sender<Result<(), Error>>,
+    ) {
+        let _ = reply_sender
+            .send(
+                self.handle_list_insert_message_inner(msg)
+                    .inspect_err(|e| error!("Failed to handle list insert message: {e:?}")),
+            )
+            .inspect_err(|_| error!("Failed to send reply"));
+    }
+
+    fn handle_list_insert_message_inner(
         &mut self,
         ListInsertMessage {
             doc_space,
@@ -123,35 +147,51 @@ impl Actor {
         self.save()
     }
 
-    async fn handle_get_message(
+    fn handle_get_message(
         &self,
         GetMessage { doc_space, doc_id }: GetMessage,
-        reply_sender: oneshot::Sender<Document>,
-    ) -> Result<(), Error> {
-        let doc = self
-            .doc_resolver
-            .hydrate(&doc_space, &doc_id, &self.syncman)?;
-        reply_sender.send(doc).map_err(|_| Error::Reply)
+        reply_sender: oneshot::Sender<Result<Document, Error>>,
+    ) {
+        let _ = reply_sender
+            .send(
+                self.doc_resolver
+                    .hydrate(&doc_space, &doc_id, &self.syncman)
+                    .map_err(|e| {
+                        error!("Failed to handle get message: {e:?}");
+                        e.into()
+                    }),
+            )
+            .inspect_err(|_| error!("Failed to send reply"));
     }
 
-    async fn handle_initiate_sync_message(
-        &mut self,
-        reply_sender: oneshot::Sender<AutomergeSyncHandle>,
-    ) -> Result<(), Error> {
-        reply_sender
+    fn handle_initiate_sync_message(&mut self, reply_sender: oneshot::Sender<AutomergeSyncHandle>) {
+        let _ = reply_sender
             .send(self.syncman.initiate_sync())
-            .map_err(|_| Error::Reply)
+            .inspect_err(|_| error!("Failed to send reply"));
     }
 
-    async fn handle_apply_sync_message(
+    fn handle_apply_sync_message(
+        &mut self,
+        data: Vec<u8>,
+        handle: AutomergeSyncHandle,
+        reply_sender: oneshot::Sender<Result<AutomergeSyncHandle, Error>>,
+    ) {
+        let _ = reply_sender
+            .send(
+                self.handle_apply_sync_message_inner(data, handle)
+                    .inspect_err(|e| error!("Failed to handle apply sync message: {e:?}")),
+            )
+            .inspect_err(|_| error!("Failed to send reply"));
+    }
+
+    fn handle_apply_sync_message_inner(
         &mut self,
         data: Vec<u8>,
         mut handle: AutomergeSyncHandle,
-        reply_sender: oneshot::Sender<AutomergeSyncHandle>,
-    ) -> Result<(), Error> {
+    ) -> Result<AutomergeSyncHandle, Error> {
         self.syncman.apply_sync(&mut handle, &data);
         self.save()?;
-        reply_sender.send(handle).map_err(|_| Error::Reply)
+        Ok(handle)
     }
 
     fn save(&mut self) -> Result<(), Error> {
@@ -186,8 +226,6 @@ pub enum Error {
     IO { message: String, cause: io::Error },
     #[error("Document error: {0}")]
     Document(#[from] doc::Error),
-    #[error("Reply error")]
-    Reply,
 }
 
 fn save_syncman(syncman: &mut AutomergeSyncman, path: &PathBuf) -> Result<(), Error> {
@@ -272,17 +310,14 @@ mod tests {
         };
         let doc = Document::Flights(flights.clone());
 
-        message_sender
-            .send(
-                UpdateMessage {
-                    doc_space: aviation::DOC_SPACE.into(),
-                    doc_id: aviation::flights::DOC_ID.into(),
-                    data: doc.serialize().unwrap(),
-                }
-                .into(),
-            )
-            .await
-            .unwrap();
+        let (msg, reply_receiver) = UpdateMessage {
+            doc_space: aviation::DOC_SPACE.into(),
+            doc_id: aviation::flights::DOC_ID.into(),
+            data: doc.serialize().unwrap(),
+        }
+        .into();
+        message_sender.send(msg).await.unwrap();
+        reply_receiver.await.unwrap().unwrap();
 
         let flight = Flight {
             id: Uuid::new_v4(),
@@ -297,19 +332,16 @@ mod tests {
         };
         let doc = Document::Flight(flight.clone());
 
-        message_sender
-            .send(
-                ListInsertMessage {
-                    doc_space: aviation::DOC_SPACE.into(),
-                    doc_id: aviation::flight::DOC_ID.into(),
-                    property: "flights".into(),
-                    index: 1,
-                    data: doc.serialize().unwrap(),
-                }
-                .into(),
-            )
-            .await
-            .unwrap();
+        let (msg, reply_receiver) = ListInsertMessage {
+            doc_space: aviation::DOC_SPACE.into(),
+            doc_id: aviation::flight::DOC_ID.into(),
+            property: "flights".into(),
+            index: 1,
+            data: doc.serialize().unwrap(),
+        }
+        .into();
+        message_sender.send(msg).await.unwrap();
+        reply_receiver.await.unwrap().unwrap();
         flights.flights.push(flight);
 
         let (cmd, reply_receiver) = GetMessage {
@@ -318,7 +350,7 @@ mod tests {
         }
         .into();
         message_sender.send(cmd).await.unwrap();
-        let doc = reply_receiver.await.unwrap();
+        let doc = reply_receiver.await.unwrap().unwrap();
         assert_eq!(doc, Document::Flights(flights));
     }
 

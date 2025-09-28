@@ -68,11 +68,27 @@ impl Atman {
             if let Some(cmd) = self.command_receiver.recv().await {
                 debug!("Command received: {:?}", cmd);
                 match cmd {
-                    Command::ConnectAndEcho { node_id, .. } => {
-                        network_handle.send(network::Message::Echo(node_id)).await
+                    Command::ConnectAndEcho {
+                        node_id,
+                        reply_sender,
+                    } => {
+                        network_handle
+                            .send(network::Message::Echo {
+                                node_id,
+                                reply_sender,
+                            })
+                            .await
                     }
-                    Command::ConnectAndSync { node_id } => {
-                        network_handle.send(network::Message::Sync(node_id)).await
+                    Command::ConnectAndSync {
+                        node_id,
+                        reply_sender,
+                    } => {
+                        network_handle
+                            .send(network::Message::Sync {
+                                node_id,
+                                reply_sender,
+                            })
+                            .await
                     }
                     Command::Sync(msg) => sync_handle.send(msg).await,
                     Command::Shutdown => {
@@ -115,8 +131,14 @@ pub struct Config {
 )]
 #[derive(Debug)]
 pub enum Command {
-    ConnectAndEcho { node_id: NodeId, payload: String },
-    ConnectAndSync { node_id: NodeId },
+    ConnectAndEcho {
+        node_id: NodeId,
+        reply_sender: oneshot::Sender<Result<(), network::Error>>,
+    },
+    ConnectAndSync {
+        node_id: NodeId,
+        reply_sender: oneshot::Sender<Result<(), network::Error>>,
+    },
     Sync(sync::message::Message),
     Shutdown,
 }

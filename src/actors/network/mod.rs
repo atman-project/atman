@@ -4,7 +4,7 @@ use std::io;
 
 use iroh::{Endpoint, NodeId, SecretKey, Watcher as _, protocol::Router};
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 use tracing::{debug, error, info, warn};
 
 use crate::actors::network::protocols::{echo, sync};
@@ -26,9 +26,7 @@ impl actman::Actor for Actor {
         loop {
             tokio::select! {
                 Some(message) = state.message_receiver.recv() => {
-                    if let Err(e) = self.handle_message(message).await {
-                        error!("Failed to handle message: {e:?}");
-                    }
+                    self.handle_message(message).await
                 }
                 Some(ctrl) = state.control_receiver.recv() => {
                     match ctrl {
@@ -92,10 +90,24 @@ impl Actor {
         })
     }
 
-    async fn handle_message(&self, message: Message) -> Result<(), Error> {
+    async fn handle_message(&self, message: Message) {
         match message {
-            Message::Echo(node_id) => self.handle_echo_message(node_id).await,
-            Message::Sync(node_id) => self.handle_sync_message(node_id).await,
+            Message::Echo {
+                node_id,
+                reply_sender,
+            } => {
+                let _ = reply_sender
+                    .send(self.handle_echo_message(node_id).await)
+                    .inspect_err(|e| error!("Failed to send reply: {e:?}"));
+            }
+            Message::Sync {
+                node_id,
+                reply_sender,
+            } => {
+                let _ = reply_sender
+                    .send(self.handle_sync_message(node_id).await)
+                    .inspect_err(|e| error!("Failed to send reply: {e:?}"));
+            }
         }
     }
 
@@ -111,8 +123,14 @@ impl Actor {
 }
 
 pub enum Message {
-    Echo(NodeId),
-    Sync(NodeId),
+    Echo {
+        node_id: NodeId,
+        reply_sender: oneshot::Sender<Result<(), Error>>,
+    },
+    Sync {
+        node_id: NodeId,
+        reply_sender: oneshot::Sender<Result<(), Error>>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +152,8 @@ pub enum Error {
     Write(#[from] iroh::endpoint::WriteError),
     #[error("IO error: {0}")]
     IO(#[from] io::Error),
-    #[error("Sync network error")]
-    SyncNetwork,
+    #[error("Sync actor error: {0}")]
+    SyncActor(#[from] crate::actors::sync::Error),
+    #[error("Failed to receive reply from Sync actor: {0}")]
+    SyncActorReply(oneshot::error::RecvError),
 }

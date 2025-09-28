@@ -100,10 +100,7 @@ impl Protocol {
         self.sync_actor_handle
             .send(crate::sync::message::Message::InitiateSync { reply_sender })
             .await;
-        let mut sync_handle = reply_receiver.await.map_err(|e| {
-            error!("Failed to receive sync handle from sync actor: {e:?}");
-            Error::SyncNetwork
-        })?;
+        let mut sync_handle = reply_receiver.await.map_err(Error::SyncActorReply)?;
 
         loop {
             match read_msg(recv_stream).await {
@@ -117,10 +114,7 @@ impl Protocol {
                             reply_sender,
                         })
                         .await;
-                    let new_sync_handle = reply_receiver.await.map_err(|e| {
-                        error!("Failed to receive sync handle from sync actor: {e:?}");
-                        Error::SyncNetwork
-                    })?;
+                    let new_sync_handle = reply_receiver.await.map_err(Error::SyncActorReply)??;
                     sync_handle = new_sync_handle;
                 }
                 Ok(None) => {
@@ -154,63 +148,57 @@ impl Protocol {
         sync_actor_handle: &actman::Handle<crate::sync::Actor>,
     ) -> Result<(), Error> {
         let conn = router.endpoint().connect(node_id, Self::ALPN).await?;
-        let (mut send_stream, mut recv_stream) = conn.open_bi().await?;
+        let (send_stream, recv_stream) = conn.open_bi().await?;
         info!("Stream opened");
 
         let sync_actor_handle = sync_actor_handle.clone();
         tokio::spawn(async move {
-            let (reply_sender, reply_receiver) = oneshot::channel();
-            sync_actor_handle
-                .send(crate::sync::message::Message::InitiateSync { reply_sender })
-                .await;
-            let Ok(mut sync_handle) = reply_receiver.await else {
-                error!("Failed to receive sync handle from sync actor");
-                return;
-            };
-
-            loop {
-                if let Some(msg) = sync_handle.generate_message() {
-                    if let Err(e) = send_msg(&msg, &mut send_stream).await {
-                        error!("Failed to send sync message: {e:?}");
-                        return;
-                    }
-                } else {
-                    info!("Nothing to sync. Syncing has been done.");
-                    if let Err(e) = send_finish_msg(&mut send_stream).await {
-                        error!("Failed to send sync finish message: {e:?}");
-                    }
-                    return;
-                }
-
-                match read_msg(&mut recv_stream).await {
-                    Ok(Some(msg)) => {
-                        info!("Received sync message of length {}", msg.len());
-                        let (reply_sender, reply_receiver) = oneshot::channel();
-                        sync_actor_handle
-                            .send(crate::sync::message::Message::ApplySync {
-                                data: msg,
-                                handle: sync_handle,
-                                reply_sender,
-                            })
-                            .await;
-                        let Ok(new_sync_handle) = reply_receiver.await else {
-                            error!("Failed to receive sync handle from sync actor");
-                            return;
-                        };
-                        sync_handle = new_sync_handle;
-                    }
-                    Ok(None) => {
-                        info!("No more sync messages from peer. Syncing has been done.");
-                        return;
-                    }
-                    Err(e) => {
-                        error!("Failed to read sync response: {e:?}");
-                        return;
-                    }
-                }
-            }
+            perform_sync(sync_actor_handle, send_stream, recv_stream)
+                .await
+                .inspect_err(|e| error!("Failed to perform sync: {e:?}"))
         });
         Ok(())
+    }
+}
+
+async fn perform_sync(
+    sync_actor_handle: actman::Handle<crate::sync::Actor>,
+    mut send_stream: SendStream,
+    mut recv_stream: RecvStream,
+) -> Result<(), Error> {
+    let (reply_sender, reply_receiver) = oneshot::channel();
+    sync_actor_handle
+        .send(crate::sync::message::Message::InitiateSync { reply_sender })
+        .await;
+    let mut sync_handle = reply_receiver.await.map_err(Error::SyncActorReply)?;
+
+    loop {
+        if let Some(msg) = sync_handle.generate_message() {
+            send_msg(&msg, &mut send_stream).await?;
+        } else {
+            info!("Nothing to sync. Syncing has been done.");
+            send_finish_msg(&mut send_stream).await?;
+        }
+
+        match read_msg(&mut recv_stream).await? {
+            Some(msg) => {
+                info!("Received sync message of length {}", msg.len());
+                let (reply_sender, reply_receiver) = oneshot::channel();
+                sync_actor_handle
+                    .send(crate::sync::message::Message::ApplySync {
+                        data: msg,
+                        handle: sync_handle,
+                        reply_sender,
+                    })
+                    .await;
+                let new_sync_handle = reply_receiver.await.map_err(Error::SyncActorReply)??;
+                sync_handle = new_sync_handle;
+            }
+            None => {
+                info!("No more sync messages from peer. Syncing has been done.");
+                return Ok(());
+            }
+        }
     }
 }
 
