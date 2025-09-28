@@ -100,7 +100,7 @@ impl Protocol {
         self.sync_actor_handle
             .send(crate::sync::message::Message::InitiateSync { reply_sender })
             .await;
-        let mut sync_handle = reply_receiver.await.map_err(Error::SyncActorReply)?;
+        let mut sync_handle = reply_receiver.await.expect("Sync actor must be available");
 
         loop {
             match read_msg(recv_stream).await {
@@ -114,7 +114,7 @@ impl Protocol {
                             reply_sender,
                         })
                         .await;
-                    let new_sync_handle = reply_receiver.await.map_err(Error::SyncActorReply)??;
+                    let new_sync_handle = reply_receiver.await.expect("as")?;
                     sync_handle = new_sync_handle;
                 }
                 Ok(None) => {
@@ -170,7 +170,7 @@ async fn perform_sync(
     sync_actor_handle
         .send(crate::sync::message::Message::InitiateSync { reply_sender })
         .await;
-    let mut sync_handle = reply_receiver.await.map_err(Error::SyncActorReply)?;
+    let mut sync_handle = reply_receiver.await.expect("Sync actor must be available");
 
     loop {
         if let Some(msg) = sync_handle.generate_message() {
@@ -191,7 +191,9 @@ async fn perform_sync(
                         reply_sender,
                     })
                     .await;
-                let new_sync_handle = reply_receiver.await.map_err(Error::SyncActorReply)??;
+                let new_sync_handle = reply_receiver
+                    .await
+                    .expect("Sync actor must be available")?;
                 sync_handle = new_sync_handle;
             }
             None => {

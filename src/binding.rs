@@ -11,7 +11,7 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use crate::{
-    Atman, Command, Config, Error,
+    Atman, Command, Config,
     actors::{network, sync},
 };
 
@@ -41,7 +41,7 @@ pub unsafe extern "C" fn run_atman(syncman_dir: *const c_char) -> c_ushort {
     init_tracing_subscriber();
 
     if COMMAND_SENDER.get().is_some() {
-        error!("{:?}", Error::DoubleInit("Atman".into()));
+        error!("Atman has been already initialized");
         return 1;
     }
 
