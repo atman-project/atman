@@ -75,6 +75,9 @@ impl Atman {
                         network_handle.send(network::Message::Sync(node_id)).await
                     }
                     Command::Sync(msg) => sync_handle.send(msg).await,
+                    Command::Shutdown => {
+                        return;
+                    }
                 }
             }
         }
@@ -115,4 +118,5 @@ pub enum Command {
     ConnectAndEcho { node_id: NodeId, payload: String },
     ConnectAndSync { node_id: NodeId },
     Sync(sync::message::Message),
+    Shutdown,
 }

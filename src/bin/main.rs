@@ -7,7 +7,7 @@ use atman::{
 };
 use clap::Parser;
 use iroh::NodeId;
-use tokio::sync::oneshot;
+use tokio::{signal, sync::oneshot};
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -80,7 +80,16 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // TODO: shutdown atman_task
+    // Wait for Ctrl+C signal.
+    let _ = signal::ctrl_c().await;
+
+    // Shutdown Atman.
+    command_sender
+        .send(atman::Command::Shutdown)
+        .await
+        .inspect_err(|e| {
+            error!("Channel send error: {e}");
+        })?;
     if let Err(e) = atman_task.await {
         error!("Failed to wait until Atman is terminated: {e}");
     }

@@ -8,7 +8,7 @@ use syncman::{
     automerge::{AutomergeSyncHandle, AutomergeSyncman},
 };
 use tokio::sync::oneshot;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     doc::{self, Document, DocumentResolver},
@@ -196,7 +196,7 @@ fn save_syncman(syncman: &mut AutomergeSyncman, path: &PathBuf) -> Result<(), Er
         message: format!("Failed to write syncman file at {path:?}"),
         cause: e,
     })?;
-    debug!("Syncman saved to {path:?}");
+    info!("Syncman saved to {path:?}");
     Ok(())
 }
 
