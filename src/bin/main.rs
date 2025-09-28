@@ -80,7 +80,13 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // TODO: shutdown atman_task
+    // Shutdown Atman.
+    command_sender
+        .send(atman::Command::Shutdown)
+        .await
+        .inspect_err(|e| {
+            error!("Channel send error: {e}");
+        })?;
     if let Err(e) = atman_task.await {
         error!("Failed to wait until Atman is terminated: {e}");
     }
