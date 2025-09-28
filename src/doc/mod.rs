@@ -160,6 +160,13 @@ impl Document {
         }
     }
 
+    pub fn serialize_pretty(&self) -> Result<String, serde_json::Error> {
+        match self {
+            Self::Flights(flights) => serde_json::to_string_pretty(flights),
+            Self::Flight(flight) => serde_json::to_string_pretty(flight),
+        }
+    }
+
     fn deserialize_flights(data: &[u8]) -> Result<Self, serde_json::Error> {
         let flights: aviation::flights::Flights = serde_json::from_slice(data)?;
         Ok(Self::Flights(flights))

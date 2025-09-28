@@ -113,7 +113,7 @@ pub unsafe extern "C" fn send_atman_sync_update_command(cmd: SyncUpdateCommand) 
     let doc_id = unsafe { std::slice::from_raw_parts(cmd.doc_id, cmd.doc_id_len) };
     let data = unsafe { std::slice::from_raw_parts(cmd.data, cmd.data_len) };
     send_command(Command::Sync(
-        crate::actors::sync::UpdateMessage {
+        crate::actors::sync::message::UpdateMessage {
             doc_space: String::from_utf8_lossy(doc_space).to_string().into(),
             doc_id: String::from_utf8_lossy(doc_id).to_string().into(),
             data: data.to_vec(),
@@ -144,7 +144,7 @@ pub unsafe extern "C" fn send_atman_sync_list_insert_command(cmd: SyncListInsert
     let property = unsafe { std::slice::from_raw_parts(cmd.property, cmd.property_len) };
     let data = unsafe { std::slice::from_raw_parts(cmd.data, cmd.data_len) };
     send_command(Command::Sync(
-        crate::actors::sync::ListInsertMessage {
+        crate::actors::sync::message::ListInsertMessage {
             doc_space: String::from_utf8_lossy(doc_space).to_string().into(),
             doc_id: String::from_utf8_lossy(doc_id).to_string().into(),
             property: String::from_utf8_lossy(property).to_string(),

@@ -1,10 +1,14 @@
 use std::{path::PathBuf, str::FromStr};
 
-use atman::{Atman, Error, NetworkConfig, SyncConfig};
+use atman::{
+    Atman, Error, NetworkConfig, SyncConfig,
+    doc::{DocId, DocSpace},
+    sync_message,
+};
 use clap::Parser;
 use iroh::NodeId;
 use tokio::sync::oneshot;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -24,7 +28,7 @@ async fn main() {
     }
 }
 
-async fn run(args: Args) -> Result<(), Error> {
+async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let config = args.to_config()?;
 
     let (atman, command_sender) = Atman::new(config)?;
@@ -38,25 +42,45 @@ async fn run(args: Args) -> Result<(), Error> {
         match command {
             Command::ConnectAndEcho { node_id, payload } => {
                 info!("Connecting to node {node_id} with payload: {payload}");
-                if let Err(e) = command_sender
+                command_sender
                     .send(atman::Command::ConnectAndEcho { node_id, payload })
                     .await
-                {
-                    error!("Channel send error: {e}");
-                }
+                    .inspect_err(|e| {
+                        error!("Channel send error: {e}");
+                    })?;
             }
             Command::ConnectAndSync { node_id } => {
                 info!("Connecting to node {node_id} to sync");
-                if let Err(e) = command_sender
+                command_sender
                     .send(atman::Command::ConnectAndSync { node_id })
                     .await
-                {
-                    error!("Channel send error: {e}");
-                }
+                    .inspect_err(|e| {
+                        error!("Channel send error: {e}");
+                    })?;
+            }
+            Command::GetDocument { doc_space, doc_id } => {
+                info!("Getting a document: {doc_space:?}/{doc_id:?}");
+                let (reply_sender, reply_receiver) = oneshot::channel();
+                command_sender
+                    .send(atman::Command::Sync(sync_message::Message::Get {
+                        msg: sync_message::GetMessage { doc_space, doc_id },
+                        reply_sender,
+                    }))
+                    .await
+                    .inspect_err(|e| {
+                        error!("Channel send error: {e}");
+                    })?;
+                let doc = reply_receiver.await.inspect_err(|e| {
+                    error!("Failed to receive document: {e:?}");
+                })?;
+                debug!("Retrieved {doc:?}");
+                let json = doc.serialize_pretty()?;
+                println!("{json}");
             }
         }
     }
 
+    // TODO: shutdown atman_task
     if let Err(e) = atman_task.await {
         error!("Failed to wait until Atman is terminated: {e}");
     }
@@ -99,4 +123,5 @@ impl Args {
 enum Command {
     ConnectAndEcho { node_id: NodeId, payload: String },
     ConnectAndSync { node_id: NodeId },
+    GetDocument { doc_space: DocSpace, doc_id: DocId },
 }

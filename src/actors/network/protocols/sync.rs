@@ -98,7 +98,7 @@ impl Protocol {
     ) -> Result<(), Error> {
         let (reply_sender, reply_receiver) = oneshot::channel();
         self.sync_actor_handle
-            .send(crate::sync::Message::InitiateSync { reply_sender })
+            .send(crate::sync::message::Message::InitiateSync { reply_sender })
             .await;
         let mut sync_handle = reply_receiver.await.map_err(|e| {
             error!("Failed to receive sync handle from sync actor: {e:?}");
@@ -111,7 +111,7 @@ impl Protocol {
                     info!("Received sync message of length {}", msg.len());
                     let (reply_sender, reply_receiver) = oneshot::channel();
                     self.sync_actor_handle
-                        .send(crate::sync::Message::ApplySync {
+                        .send(crate::sync::message::Message::ApplySync {
                             data: msg,
                             handle: sync_handle,
                             reply_sender,
@@ -158,7 +158,7 @@ impl Protocol {
         tokio::spawn(async move {
             let (reply_sender, reply_receiver) = oneshot::channel();
             sync_actor_handle
-                .send(crate::sync::Message::InitiateSync { reply_sender })
+                .send(crate::sync::message::Message::InitiateSync { reply_sender })
                 .await;
             let Ok(mut sync_handle) = reply_receiver.await else {
                 error!("Failed to receive sync handle from sync actor");
@@ -181,7 +181,7 @@ impl Protocol {
                         info!("Received sync message of length {}", msg.len());
                         let (reply_sender, reply_receiver) = oneshot::channel();
                         sync_actor_handle
-                            .send(crate::sync::Message::ApplySync {
+                            .send(crate::sync::message::Message::ApplySync {
                                 data: msg,
                                 handle: sync_handle,
                                 reply_sender,
