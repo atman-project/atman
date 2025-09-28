@@ -4,7 +4,10 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
 
 use crate::actors::{network, sync};
-pub use crate::actors::{network::Config as NetworkConfig, sync::Config as SyncConfig};
+pub use crate::actors::{
+    network::Config as NetworkConfig,
+    sync::{Config as SyncConfig, message as sync_message},
+};
 
 mod actors;
 pub mod binding;
@@ -111,5 +114,5 @@ pub struct Config {
 pub enum Command {
     ConnectAndEcho { node_id: NodeId, payload: String },
     ConnectAndSync { node_id: NodeId },
-    Sync(sync::Message),
+    Sync(sync::message::Message),
 }
