@@ -124,7 +124,7 @@ impl Protocol {
                     sync_handle = new_sync_handle;
                 }
                 Ok(None) => {
-                    info!("No more sync messages from peer");
+                    info!("No more sync messages from peer. Syncing has been done.");
                     return Ok(());
                 }
                 Err(e) => {
@@ -139,7 +139,10 @@ impl Protocol {
                     return Err(e);
                 }
             } else {
-                info!("Nothing to sync");
+                info!("Nothing to sync. Syncing has been done.");
+                if let Err(e) = send_finish_msg(send_stream).await {
+                    error!("Failed to send sync finish message: {e:?}");
+                }
                 return Ok(());
             }
         }
@@ -172,7 +175,10 @@ impl Protocol {
                         return;
                     }
                 } else {
-                    info!("Nothing to sync");
+                    info!("Nothing to sync. Syncing has been done.");
+                    if let Err(e) = send_finish_msg(&mut send_stream).await {
+                        error!("Failed to send sync finish message: {e:?}");
+                    }
                     return;
                 }
 
@@ -194,7 +200,7 @@ impl Protocol {
                         sync_handle = new_sync_handle;
                     }
                     Ok(None) => {
-                        info!("No more sync messages from peer");
+                        info!("No more sync messages from peer. Syncing has been done.");
                         return;
                     }
                     Err(e) => {
@@ -209,9 +215,20 @@ impl Protocol {
 }
 
 async fn send_msg(msg: &[u8], stream: &mut SendStream) -> Result<(), Error> {
-    info!("Sending sync message to peer");
+    if msg.is_empty() {
+        return send_finish_msg(stream).await;
+    }
+
+    assert!(!msg.is_empty());
+    info!("Sending sync message to peer: len:{}", msg.len());
     stream.write_u64(msg.len() as u64).await?;
     stream.write_all(msg).await?;
+    Ok(())
+}
+
+async fn send_finish_msg(stream: &mut SendStream) -> Result<(), Error> {
+    info!("Sending sync finish message to peer");
+    stream.write_u64(0u64).await?;
     Ok(())
 }
 
