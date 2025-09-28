@@ -1,4 +1,3 @@
 # Atman
 
-Atman is a set of protocols that can be embedded into
-any desktop and mobile applications.
+A set of protocols designed for the [Atman Project](https://github.com/atman-project), capable of running across servers, laptops, and mobile devices.
