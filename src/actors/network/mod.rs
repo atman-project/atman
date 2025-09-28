@@ -1,12 +1,12 @@
+mod error;
 mod protocols;
-
-use std::io;
 
 use iroh::{Endpoint, NodeId, SecretKey, Watcher as _, protocol::Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, oneshot};
 use tracing::{debug, error, info, warn};
 
+pub use crate::actors::network::error::Error;
 use crate::actors::network::protocols::{echo, sync};
 
 pub struct Actor {
@@ -68,8 +68,7 @@ impl Actor {
                 sync::Protocol::ALPN.to_vec(),
             ])
             .bind()
-            .await
-            .map_err(|e| Error::Bind(Box::new(e)))?;
+            .await?;
         let (echo_event_sender, _) = broadcast::channel(128);
         let echo = echo::Protocol::new(echo_event_sender.clone());
         let (sync_event_sender, _) = broadcast::channel(128);
@@ -136,24 +135,4 @@ pub enum Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub key: Option<SecretKey>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Bind error: {0}")]
-    Bind(Box<dyn std::error::Error + Send + Sync>),
-    #[error("Connect error: {0}")]
-    Connect(#[from] iroh::endpoint::ConnectError),
-    #[error("Connection error: {0}")]
-    Connection(#[from] iroh::endpoint::ConnectionError),
-    #[error("ReadExact error: {0}")]
-    ReadExact(#[from] iroh::endpoint::ReadExactError),
-    #[error("Write error: {0}")]
-    Write(#[from] iroh::endpoint::WriteError),
-    #[error("IO error: {0}")]
-    IO(#[from] io::Error),
-    #[error("Sync actor error: {0}")]
-    SyncActor(#[from] crate::actors::sync::Error),
-    #[error("Failed to receive reply from Sync actor: {0}")]
-    SyncActorReply(oneshot::error::RecvError),
 }

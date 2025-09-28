@@ -102,21 +102,12 @@ impl Atman {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Network actor error: {0}")]
-    NetworkActorError(#[from] network::Error),
-    #[error("Sync actor error: {0}")]
-    SyncActorError(#[from] sync::Error),
-    #[error("Double initialization: {0}")]
-    DoubleInit(String),
+    #[error("Network error: {0}")]
+    Network(#[from] network::Error),
+    #[error("Sync error: {0}")]
+    Sync(#[from] sync::Error),
     #[error("Invalid config: {0}")]
     InvalidConfig(String),
-    #[error("Resolver error: {0}")]
-    Resolver(#[from] doc::Error),
-    #[error("IO error: {message}: {cause}")]
-    IO {
-        message: String,
-        cause: std::io::Error,
-    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
