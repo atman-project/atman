@@ -7,7 +7,7 @@ use atman::{
 };
 use clap::Parser;
 use iroh::NodeId;
-use tokio::sync::oneshot;
+use tokio::{signal, sync::oneshot};
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -79,6 +79,9 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    // Wait for Ctrl+C signal.
+    let _ = signal::ctrl_c().await;
 
     // Shutdown Atman.
     command_sender
