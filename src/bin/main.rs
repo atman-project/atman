@@ -7,6 +7,7 @@ use atman::{
 };
 use clap::Parser;
 use iroh::NodeId;
+use qrcode::{QrCode, QrResult, render::unicode};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
@@ -14,8 +15,8 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
         .with_max_level(tracing::Level::INFO)
+        .with_env_filter(EnvFilter::from_default_env())
         .init();
 
     let args = Args::parse();
@@ -40,6 +41,9 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(command) = args.command {
         match command {
+            Command::Status => {
+                handle_status(&command_sender).await;
+            }
             Command::ConnectAndEcho { node_id } => {
                 handle_connect_and_echo(&command_sender, node_id).await;
             }
@@ -63,6 +67,51 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         error!("Failed to wait until Atman is terminated: {e}");
     }
     Ok(())
+}
+
+async fn handle_status(command_sender: &mpsc::Sender<atman::Command>) {
+    info!("Handling status command");
+    let (reply_sender, reply_receiver) = oneshot::channel();
+    if let Err(e) = command_sender
+        .send(atman::Command::Status { reply_sender })
+        .await
+    {
+        error!("Channel send error: {e}");
+        return;
+    }
+    let Ok(status) = reply_receiver.await else {
+        error!("Failed to receive status reply");
+        return;
+    };
+
+    println!("============================");
+    println!(" Status");
+    println!("============================");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&status).expect("Status should be serializable")
+    );
+
+    match generate_qr(status.node_id.to_string().as_bytes()) {
+        Ok(code) => {
+            println!("============================");
+            println!(" Node ID -- QR Code");
+            println!("============================");
+            println!("{code}");
+        }
+        Err(e) => {
+            error!("Failed to generate QR code: {e}");
+        }
+    }
+}
+
+fn generate_qr(data: &[u8]) -> QrResult<String> {
+    let image = QrCode::new(data)?
+        .render::<unicode::Dense1x2>()
+        .quiet_zone(true)
+        .module_dimensions(1, 1)
+        .build();
+    Ok(image)
 }
 
 async fn handle_connect_and_echo(command_sender: &mpsc::Sender<atman::Command>, node_id: NodeId) {
@@ -141,7 +190,7 @@ async fn handle_get_document(
 #[derive(Debug, Parser)]
 struct Args {
     #[clap(long)]
-    iroh_key: Option<String>,
+    network_key: Option<String>,
     #[clap(long)]
     syncman_dir: String,
     #[clap(subcommand)]
@@ -152,7 +201,7 @@ struct Args {
 
 impl Args {
     fn to_config(&self) -> Result<atman::Config, Error> {
-        let iroh_key = match &self.iroh_key {
+        let network_key = match &self.network_key {
             Some(key) => Some(
                 iroh::SecretKey::from_str(key.as_str())
                     .map_err(|_| Error::InvalidConfig("Invalid Iroh key".to_string()))?,
@@ -161,7 +210,7 @@ impl Args {
         };
 
         Ok(atman::Config {
-            network: NetworkConfig { key: iroh_key },
+            network: NetworkConfig { key: network_key },
             sync: SyncConfig {
                 syncman_dir: PathBuf::from(&self.syncman_dir),
                 overwrite: self.overwrite,
@@ -172,6 +221,7 @@ impl Args {
 
 #[derive(Debug, Parser)]
 enum Command {
+    Status,
     ConnectAndEcho { node_id: NodeId },
     ConnectAndSync { node_id: NodeId },
     GetDocument { doc_space: DocSpace, doc_id: DocId },
