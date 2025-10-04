@@ -92,6 +92,7 @@ impl Atman {
                     }
                     Command::Sync(msg) => sync_handle.send(msg).await,
                     Command::Shutdown => {
+                        runner.shutdown().await;
                         return;
                     }
                 }
