@@ -1,4 +1,5 @@
 use ::iroh::NodeId;
+use actman::Handle;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
@@ -91,6 +92,9 @@ impl Atman {
                             .await
                     }
                     Command::Sync(msg) => sync_handle.send(msg).await,
+                    Command::Status { reply_sender } => {
+                        handle_status_command(reply_sender, &network_handle).await;
+                    }
                     Command::Shutdown => {
                         runner.shutdown().await;
                         return;
@@ -99,6 +103,28 @@ impl Atman {
             }
         }
     }
+}
+
+async fn handle_status_command(
+    reply_sender: oneshot::Sender<Status>,
+    network_handle: &Handle<network::Actor>,
+) {
+    let (network_status_sender, network_status_receiver) = oneshot::channel();
+    network_handle
+        .send(network::Message::Status {
+            reply_sender: network_status_sender,
+        })
+        .await;
+
+    let Ok(node_id) = network_status_receiver.await else {
+        error!("Failed to receive network status");
+        return;
+    };
+
+    let status = Status { node_id };
+    let _ = reply_sender
+        .send(status)
+        .inspect_err(|_| error!("Failed to send status reply"));
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -132,5 +158,13 @@ pub enum Command {
         reply_sender: oneshot::Sender<Result<(), network::Error>>,
     },
     Sync(sync::message::Message),
+    Status {
+        reply_sender: oneshot::Sender<Status>,
+    },
     Shutdown,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Status {
+    pub node_id: NodeId,
 }

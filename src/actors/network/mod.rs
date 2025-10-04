@@ -107,6 +107,11 @@ impl Actor {
                     .send(self.handle_sync_message(node_id).await)
                     .inspect_err(|e| error!("Failed to send reply: {e:?}"));
             }
+            Message::Status { reply_sender } => {
+                let _ = reply_sender
+                    .send(self.router.endpoint().node_id())
+                    .inspect_err(|e| error!("Failed to send reply: {e:?}"));
+            }
         }
     }
 
@@ -129,6 +134,9 @@ pub enum Message {
     Sync {
         node_id: NodeId,
         reply_sender: oneshot::Sender<Result<(), Error>>,
+    },
+    Status {
+        reply_sender: oneshot::Sender<NodeId>,
     },
 }
 
