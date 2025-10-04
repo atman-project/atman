@@ -8,7 +8,7 @@ use iroh::{
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
-    sync::broadcast,
+    sync::mpsc,
 };
 use tracing::{error, info};
 
@@ -16,7 +16,7 @@ use crate::actors::network::Error;
 
 #[derive(Debug, Clone)]
 pub struct Protocol {
-    event_sender: broadcast::Sender<Event>,
+    event_sender: mpsc::Sender<Event>,
 }
 
 impl ProtocolHandler for Protocol {
@@ -32,7 +32,7 @@ impl ProtocolHandler for Protocol {
 impl Protocol {
     pub const ALPN: &[u8] = b"atman/echo/0";
 
-    pub fn new(event_sender: broadcast::Sender<Event>) -> Self {
+    pub fn new(event_sender: mpsc::Sender<Event>) -> Self {
         Self { event_sender }
     }
 }
@@ -41,12 +41,18 @@ impl Protocol {
     async fn handle_connection(self, connection: Connection) -> Result<(), AcceptError> {
         // Wait for the connection to be fully established.
         let node_id = connection.remote_node_id()?;
-        self.event_sender.send(Event::Accepted { node_id }).ok();
+        if let Err(e) = self.event_sender.send(Event::Accepted { node_id }).await {
+            error!("Failed to send echo event to the channel: {e:?}");
+        }
         let res = self.handle_connection_0(&connection).await;
         let error = res.as_ref().err().map(|err| err.to_string());
-        self.event_sender
+        if let Err(e) = self
+            .event_sender
             .send(Event::Closed { node_id, error })
-            .ok();
+            .await
+        {
+            error!("Failed to send echo event to the channel: {e:?}");
+        }
         res
     }
 

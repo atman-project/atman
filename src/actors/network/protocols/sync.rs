@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use syncman::SyncHandle;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::{broadcast, oneshot},
+    sync::{mpsc, oneshot},
 };
 use tracing::{error, info};
 
@@ -17,7 +17,7 @@ use crate::actors::network::Error;
 
 #[derive(Clone)]
 pub struct Protocol {
-    event_sender: broadcast::Sender<Event>,
+    event_sender: mpsc::Sender<Event>,
     sync_actor_handle: actman::Handle<crate::sync::Actor>,
 }
 
@@ -41,7 +41,7 @@ impl Protocol {
     pub const ALPN: &[u8] = b"atman/sync/0";
 
     pub fn new(
-        event_sender: broadcast::Sender<Event>,
+        event_sender: mpsc::Sender<Event>,
         sync_actor_handle: actman::Handle<crate::sync::Actor>,
     ) -> Self {
         Self {
@@ -55,12 +55,18 @@ impl Protocol {
     async fn handle_connection(self, connection: Connection) -> Result<(), AcceptError> {
         // Wait for the connection to be fully established.
         let node_id = connection.remote_node_id()?;
-        self.event_sender.send(Event::Accepted { node_id }).ok();
+        if let Err(e) = self.event_sender.send(Event::Accepted { node_id }).await {
+            error!("Failed to send sync event to the channel: {e:?}");
+        }
         let res = self.handle_connection_0(&connection).await;
         let error = res.as_ref().err().map(|err| err.to_string());
-        self.event_sender
+        if let Err(e) = self
+            .event_sender
             .send(Event::Closed { node_id, error })
-            .ok();
+            .await
+        {
+            error!("Failed to send sync event to the channel: {e:?}");
+        }
         res
     }
 

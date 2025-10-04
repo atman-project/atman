@@ -3,7 +3,7 @@ mod protocols;
 
 use iroh::{Endpoint, NodeId, SecretKey, Watcher as _, protocol::Router};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 pub use crate::actors::network::error::Error;
@@ -12,17 +12,15 @@ use crate::actors::network::protocols::{echo, sync};
 pub struct Actor {
     router: Router,
     sync_actor_handle: actman::Handle<crate::sync::Actor>,
-    echo_event_sender: broadcast::Sender<echo::Event>,
-    sync_event_sender: broadcast::Sender<sync::Event>,
+    echo_event_receiver: mpsc::Receiver<echo::Event>,
+    sync_event_receiver: mpsc::Receiver<sync::Event>,
 }
 
 #[async_trait::async_trait]
 impl actman::Actor for Actor {
     type Message = Message;
 
-    async fn run(self, mut state: actman::State<Self>) {
-        let mut echo_event_receiver = self.echo_event_sender.subscribe();
-        let mut sync_event_receiver = self.sync_event_sender.subscribe();
+    async fn run(mut self, mut state: actman::State<Self>) {
         loop {
             tokio::select! {
                 Some(message) = state.message_receiver.recv() => {
@@ -36,10 +34,10 @@ impl actman::Actor for Actor {
                         },
                     }
                 }
-                Ok(event) = echo_event_receiver.recv() => {
+                Some(event) = self.echo_event_receiver.recv() => {
                     debug!("Echo event: {event:?}");
                 }
-                Ok(event) = sync_event_receiver.recv() => {
+                Some(event) = self.sync_event_receiver.recv() => {
                     debug!("Echo event: {event:?}");
                 }
                 else => {
@@ -50,6 +48,8 @@ impl actman::Actor for Actor {
         }
     }
 }
+
+const EVENT_CHANNEL_SIZE: usize = 128;
 
 impl Actor {
     pub async fn new(
@@ -69,10 +69,10 @@ impl Actor {
             ])
             .bind()
             .await?;
-        let (echo_event_sender, _) = broadcast::channel(128);
-        let echo = echo::Protocol::new(echo_event_sender.clone());
-        let (sync_event_sender, _) = broadcast::channel(128);
-        let sync = sync::Protocol::new(sync_event_sender.clone(), sync_actor_handle.clone());
+        let (echo_event_sender, echo_event_receiver) = mpsc::channel(EVENT_CHANNEL_SIZE);
+        let echo = echo::Protocol::new(echo_event_sender);
+        let (sync_event_sender, sync_event_receiver) = mpsc::channel(EVENT_CHANNEL_SIZE);
+        let sync = sync::Protocol::new(sync_event_sender, sync_actor_handle.clone());
         let router = Router::builder(endpoint)
             .accept(echo::Protocol::ALPN, echo)
             .accept(sync::Protocol::ALPN, sync)
@@ -84,8 +84,8 @@ impl Actor {
         Ok(Self {
             router,
             sync_actor_handle,
-            echo_event_sender,
-            sync_event_sender,
+            echo_event_receiver,
+            sync_event_receiver,
         })
     }
 
