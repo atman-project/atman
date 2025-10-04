@@ -1,0 +1,20 @@
+[package]
+authors     = ["Youngjoon Lee"]
+description = "Command-line interface for Atman"
+edition     = "2024"
+homepage    = "https://github.com/atman-project"
+license     = "Apache-2.0"
+name        = "atman-cli"
+readme      = "README.md"
+repository  = "https://github.com/atman-project/atman"
+version     = "0.1.0"
+
+[dependencies]
+atman              = { path = "../atman" }
+clap               = { version = "4", features = ["derive"] }
+iroh               = { workspace = true }
+qrcode             = "0.14"
+serde_json         = { workspace = true }
+tokio              = { workspace = true, features = ["rt-multi-thread"] }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

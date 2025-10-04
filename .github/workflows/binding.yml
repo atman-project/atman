@@ -23,4 +23,6 @@ jobs:
         run: cargo install --force cbindgen
 
       - name: Build bindings
-        run: bash build_bindings.sh
+        run: |
+          cd atman
+          bash build_bindings.sh
