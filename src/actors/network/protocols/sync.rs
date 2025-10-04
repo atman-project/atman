@@ -2,11 +2,11 @@ use std::fmt::{self, Debug, Formatter};
 
 use iroh::{
     NodeId,
-    endpoint::{Connection, RecvStream, SendStream},
+    endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
 };
 use serde::{Deserialize, Serialize};
-use syncman::SyncHandle;
+use syncman::{SyncHandle, automerge::AutomergeSyncHandle};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{mpsc, oneshot},
@@ -80,7 +80,7 @@ impl Protocol {
         let (mut send, mut recv) = connection.accept_bi().await?;
         info!("Accepted stream");
 
-        if let Err(e) = self.sync(&mut send, &mut recv).await {
+        if let Err(e) = perform_sync(&self.sync_actor_handle, &mut send, &mut recv, false).await {
             error!("Failed to sync: {e}");
             return Err(AcceptError::from_err(e));
         }
@@ -97,69 +97,18 @@ impl Protocol {
         Ok(())
     }
 
-    async fn sync(
-        &self,
-        send_stream: &mut iroh::endpoint::SendStream,
-        recv_stream: &mut iroh::endpoint::RecvStream,
-    ) -> Result<(), Error> {
-        let (reply_sender, reply_receiver) = oneshot::channel();
-        self.sync_actor_handle
-            .send(crate::sync::message::Message::InitiateSync { reply_sender })
-            .await;
-        let mut sync_handle = reply_receiver.await.expect("Sync actor must be available");
-
-        loop {
-            match read_msg(recv_stream).await {
-                Ok(Some(msg)) => {
-                    info!("Received sync message of length {}", msg.len());
-                    let (reply_sender, reply_receiver) = oneshot::channel();
-                    self.sync_actor_handle
-                        .send(crate::sync::message::Message::ApplySync {
-                            data: msg,
-                            handle: sync_handle,
-                            reply_sender,
-                        })
-                        .await;
-                    let new_sync_handle = reply_receiver.await.expect("as")?;
-                    sync_handle = new_sync_handle;
-                }
-                Ok(None) => {
-                    info!("No more sync messages from peer. Syncing has been done.");
-                    return Ok(());
-                }
-                Err(e) => {
-                    error!("Failed to read sync response: {e:?}");
-                    return Err(e);
-                }
-            }
-
-            if let Some(msg) = sync_handle.generate_message() {
-                if let Err(e) = send_msg(&msg, send_stream).await {
-                    error!("Failed to send sync message: {e:?}");
-                    return Err(e);
-                }
-            } else {
-                info!("Nothing to sync. Syncing has been done.");
-                if let Err(e) = send_finish_msg(send_stream).await {
-                    error!("Failed to send sync finish message: {e:?}");
-                }
-                return Ok(());
-            }
-        }
-    }
-
     pub async fn connect_and_spawn(
         node_id: NodeId,
         router: &Router,
         sync_actor_handle: &actman::Handle<crate::sync::Actor>,
     ) -> Result<(), Error> {
         let conn = router.endpoint().connect(node_id, Self::ALPN).await?;
-        let (send_stream, recv_stream) = conn.open_bi().await?;
+        let (mut send_stream, mut recv_stream) = conn.open_bi().await?;
         info!("Stream opened");
 
         let sync_actor_handle = sync_actor_handle.clone();
         tokio::spawn(async move {
-            perform_sync(sync_actor_handle, send_stream, recv_stream)
+            perform_sync(&sync_actor_handle, &mut send_stream, &mut recv_stream, true)
                 .await
                 .inspect_err(|e| error!("Failed to perform sync: {e:?}"))
         });
@@ -167,26 +116,28 @@ impl Protocol {
     }
 }
 
-async fn perform_sync(
-    sync_actor_handle: actman::Handle<crate::sync::Actor>,
-    mut send_stream: SendStream,
-    mut recv_stream: RecvStream,
-) -> Result<(), Error> {
+async fn perform_sync<SendStream, RecvStream>(
+    sync_actor_handle: &actman::Handle<crate::sync::Actor>,
+    send_stream: &mut SendStream,
+    recv_stream: &mut RecvStream,
+    as_trigger: bool,
+) -> Result<(), Error>
+where
+    SendStream: AsyncWriteExt + Unpin,
+    RecvStream: AsyncReadExt + Unpin,
+{
     let (reply_sender, reply_receiver) = oneshot::channel();
     sync_actor_handle
         .send(crate::sync::message::Message::InitiateSync { reply_sender })
         .await;
     let mut sync_handle = reply_receiver.await.expect("Sync actor must be available");
 
-    loop {
-        if let Some(msg) = sync_handle.generate_message() {
-            send_msg(&msg, &mut send_stream).await?;
-        } else {
-            info!("Nothing to sync. Syncing has been done.");
-            send_finish_msg(&mut send_stream).await?;
-        }
+    if as_trigger && !generate_and_send_sync_msg(&mut sync_handle, send_stream).await? {
+        return Ok(());
+    }
 
-        match read_msg(&mut recv_stream).await? {
+    loop {
+        match read_msg(recv_stream).await? {
             Some(msg) => {
                 info!("Received sync message of length {}", msg.len());
                 let (reply_sender, reply_receiver) = oneshot::channel();
@@ -197,20 +148,46 @@ async fn perform_sync(
                         reply_sender,
                     })
                     .await;
-                let new_sync_handle = reply_receiver
+                sync_handle = reply_receiver
                     .await
                     .expect("Sync actor must be available")?;
-                sync_handle = new_sync_handle;
             }
             None => {
                 info!("No more sync messages from peer. Syncing has been done.");
                 return Ok(());
             }
         }
+
+        if !generate_and_send_sync_msg(&mut sync_handle, send_stream).await? {
+            return Ok(());
+        }
     }
 }
 
-async fn send_msg(msg: &[u8], stream: &mut SendStream) -> Result<(), Error> {
+/// Generate a sync message, send it to the peer, and return `true`.
+/// If there is no more message to send, send a finish message and return
+/// `false`.
+async fn generate_and_send_sync_msg<Stream>(
+    sync_handle: &mut AutomergeSyncHandle,
+    send_stream: &mut Stream,
+) -> Result<bool, Error>
+where
+    Stream: AsyncWriteExt + Unpin,
+{
+    if let Some(msg) = sync_handle.generate_message() {
+        send_msg(&msg, send_stream).await?;
+        Ok(true)
+    } else {
+        info!("Nothing to sync. Syncing has been done.");
+        send_finish_msg(send_stream).await?;
+        Ok(false)
+    }
+}
+
+async fn send_msg<Stream>(msg: &[u8], stream: &mut Stream) -> Result<(), Error>
+where
+    Stream: AsyncWriteExt + Unpin,
+{
     if msg.is_empty() {
         return send_finish_msg(stream).await;
     }
@@ -222,13 +199,19 @@ async fn send_msg(msg: &[u8], stream: &mut SendStream) -> Result<(), Error> {
     Ok(())
 }
 
-async fn send_finish_msg(stream: &mut SendStream) -> Result<(), Error> {
+async fn send_finish_msg<Stream>(stream: &mut Stream) -> Result<(), Error>
+where
+    Stream: AsyncWriteExt + Unpin,
+{
     info!("Sending sync finish message to peer");
     stream.write_u64(0u64).await?;
     Ok(())
 }
 
-async fn read_msg(stream: &mut RecvStream) -> Result<Option<Vec<u8>>, Error> {
+async fn read_msg<Stream>(stream: &mut Stream) -> Result<Option<Vec<u8>>, Error>
+where
+    Stream: AsyncReadExt + Unpin,
+{
     info!("Reading sync response from peer");
     let len = stream.read_u64().await?;
     if len == 0 {
@@ -250,4 +233,51 @@ pub enum Event {
         node_id: NodeId,
         error: Option<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use tempdir::TempDir;
+
+    use super::*;
+    use crate::actors::sync;
+
+    #[test_log::test(tokio::test)]
+    async fn test_sync() {
+        let sync_actor_0 = sync::Actor::new(sync_config()).unwrap();
+        let sync_actor_1 = sync::Actor::new(sync_config()).unwrap();
+
+        let mut runner = actman::Runner::new();
+        let sync_handle_0 = runner.run(sync_actor_0);
+        let sync_handle_1 = runner.run(sync_actor_1);
+
+        let (mut listener_recv, mut trigger_send) = tokio::io::simplex(10);
+        let (mut trigger_recv, mut listener_send) = tokio::io::simplex(10);
+
+        // Run listener side
+        let join_listener = tokio::spawn(async move {
+            perform_sync(
+                &sync_handle_1,
+                &mut listener_send,
+                &mut listener_recv,
+                false,
+            )
+            .await
+        });
+        // Run trigger side
+        perform_sync(&sync_handle_0, &mut trigger_send, &mut trigger_recv, true)
+            .await
+            .unwrap();
+        // Wait for listener to finish without error.
+        let _ = join_listener.await.unwrap();
+
+        runner.shutdown().await;
+    }
+
+    fn sync_config() -> sync::Config {
+        sync::Config {
+            syncman_dir: TempDir::new("network-sync-test").unwrap().into_path(),
+            overwrite: false,
+        }
+    }
 }
