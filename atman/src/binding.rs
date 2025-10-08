@@ -1,8 +1,10 @@
 use std::{
     ffi::{CStr, c_char, c_ushort},
     path::PathBuf,
+    str::FromStr,
 };
 
+use iroh::NodeId;
 use once_cell::sync::OnceCell;
 use tokio::{
     runtime::Runtime,
@@ -102,10 +104,45 @@ fn send_command(cmd: Command) {
     }
 }
 
+/// Send a [`ConnectAndSyncCommand`] to Atman.
+///
+/// # Safety
+/// All fields in [`ConnectAndSyncCommand`] must be valid pointers to byte
+/// arrays of the corresponding length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn send_atman_connect_and_sync_command(cmd: ConnectAndSyncCommand) {
+    let node_id = unsafe { std::slice::from_raw_parts(cmd.node_id, cmd.node_id_len) };
+    let node_id = match NodeId::from_str(String::from_utf8_lossy(node_id).to_string().as_str()) {
+        Ok(node_id) => node_id,
+        Err(e) => {
+            error!("Invalid NodeId: {e}");
+            return;
+        }
+    };
+
+    let (reply_sender, reply_receiver) = oneshot::channel();
+    send_command(Command::ConnectAndSync {
+        node_id,
+        reply_sender,
+    });
+
+    match reply_receiver.blocking_recv() {
+        Ok(Ok(())) => info!("ConnectAndSync succeeded"),
+        Ok(Err(e)) => error!("ConnectAndSync failed: {e:?}"),
+        Err(e) => error!("Failed to receive ConnectAndSync reply: {e:?}"),
+    }
+}
+
+#[repr(C)]
+pub struct ConnectAndSyncCommand {
+    pub node_id: *const u8,
+    pub node_id_len: usize,
+}
+
 /// Send a [`SyncUpdateCommand`] to Atman.
 ///
 /// # Safety
-/// all fields in [`SyncUpdateCommand`] must be valid pointers to byte arrays of
+/// All fields in [`SyncUpdateCommand`] must be valid pointers to byte arrays of
 /// the corresponding length.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_sync_update_command(cmd: SyncUpdateCommand) {
@@ -141,7 +178,7 @@ pub struct SyncUpdateCommand {
 /// Send a [`SyncListInsertCommand`] to Atman.
 ///
 /// # Safety
-/// all fields in [`SyncListInsertCommand`] must be valid pointers to byte
+/// All fields in [`SyncListInsertCommand`] must be valid pointers to byte
 /// arrays of the corresponding length.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_sync_list_insert_command(cmd: SyncListInsertCommand) {
