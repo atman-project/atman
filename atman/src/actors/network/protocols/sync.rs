@@ -13,7 +13,10 @@ use tokio::{
 };
 use tracing::{error, info};
 
-use crate::actors::network::Error;
+use crate::actors::network::{
+    Error,
+    protocols::{close_conn, connect, wait_conn_closed},
+};
 
 #[derive(Clone)]
 pub struct Protocol {
@@ -85,15 +88,7 @@ impl Protocol {
             return Err(AcceptError::from_err(e));
         }
 
-        // By calling `finish` on the send stream we signal that we will not send
-        // anything further, which makes the receive stream on the other end
-        // terminate.
-        send.finish()?;
-
-        // Wait until the remote closes the connection, which it does once it
-        // received the response.
-        connection.closed().await;
-        info!("Connection closed by remote");
+        wait_conn_closed(connection, &mut send).await;
         Ok(())
     }
 
@@ -101,18 +96,30 @@ impl Protocol {
         node_id: NodeId,
         router: &Router,
         sync_actor_handle: &actman::Handle<crate::sync::Actor>,
-    ) -> Result<(), Error> {
-        let conn = router.endpoint().connect(node_id, Self::ALPN).await?;
-        let (mut send_stream, mut recv_stream) = conn.open_bi().await?;
+        reply_sender: oneshot::Sender<Result<(), Error>>,
+    ) {
+        let (conn, mut send_stream, mut recv_stream) =
+            match connect(node_id, router, Self::ALPN).await {
+                Ok(streams) => streams,
+                Err(e) => {
+                    let _ = reply_sender
+                        .send(Err(e))
+                        .inspect_err(|_| error!("failed to send reply"));
+                    return;
+                }
+            };
         info!("Stream opened");
 
         let sync_actor_handle = sync_actor_handle.clone();
         tokio::spawn(async move {
-            perform_sync(&sync_actor_handle, &mut send_stream, &mut recv_stream, true)
+            let result = perform_sync(&sync_actor_handle, &mut send_stream, &mut recv_stream, true)
                 .await
-                .inspect_err(|e| error!("Failed to perform sync: {e:?}"))
+                .inspect_err(|e| error!("Failed to perform sync: {e:?}"));
+            close_conn(&conn, &mut send_stream, result.is_err()).await;
+            let _ = reply_sender
+                .send(result)
+                .inspect_err(|_| error!("failed to send reply"));
         });
-        Ok(())
     }
 }
 

@@ -104,19 +104,11 @@ impl Actor {
             Message::Echo {
                 node_id,
                 reply_sender,
-            } => {
-                let _ = reply_sender
-                    .send(self.handle_echo_message(node_id).await)
-                    .inspect_err(|e| error!("Failed to send reply: {e:?}"));
-            }
+            } => self.handle_echo_message(node_id, reply_sender).await,
             Message::Sync {
                 node_id,
                 reply_sender,
-            } => {
-                let _ = reply_sender
-                    .send(self.handle_sync_message(node_id).await)
-                    .inspect_err(|e| error!("Failed to send reply: {e:?}"));
-            }
+            } => self.handle_sync_message(node_id, reply_sender).await,
             Message::Status { reply_sender } => {
                 let _ = reply_sender
                     .send(self.router.endpoint().node_id())
@@ -125,14 +117,28 @@ impl Actor {
         }
     }
 
-    async fn handle_echo_message(&self, node_id: NodeId) -> Result<(), Error> {
+    async fn handle_echo_message(
+        &self,
+        node_id: NodeId,
+        reply_sender: oneshot::Sender<Result<(), Error>>,
+    ) {
         debug!("Handling Echo message to {node_id}");
-        echo::Protocol::connect_and_spawn(node_id, &self.router).await
+        echo::Protocol::connect_and_spawn(node_id, &self.router, reply_sender).await;
     }
 
-    async fn handle_sync_message(&self, node_id: NodeId) -> Result<(), Error> {
+    async fn handle_sync_message(
+        &self,
+        node_id: NodeId,
+        reply_sender: oneshot::Sender<Result<(), Error>>,
+    ) {
         debug!("Handling Sync message to {node_id}");
-        sync::Protocol::connect_and_spawn(node_id, &self.router, &self.sync_actor_handle).await
+        sync::Protocol::connect_and_spawn(
+            node_id,
+            &self.router,
+            &self.sync_actor_handle,
+            reply_sender,
+        )
+        .await;
     }
 }
 
