@@ -9,14 +9,13 @@ use clap::Parser;
 use iroh::NodeId;
 use qrcode::{QrCode, QrResult, render::unicode};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info};
+use tracing::{Level, debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(EnvFilter::from_default_env().add_directive(Level::ERROR.into()))
         .init();
 
     let args = Args::parse();
