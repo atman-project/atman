@@ -20,11 +20,14 @@ LIB_NAME="lib${PROJECT_NAME}.a"
 
 cargo build --target aarch64-apple-ios $CARGO_FLAGS
 lipo -info ${TARGET_DIR}/aarch64-apple-ios/${BUILD_MODE}/${LIB_NAME}
+ls -lh ${TARGET_DIR}/aarch64-apple-ios/${BUILD_MODE}/${LIB_NAME}
 
 cargo build --target x86_64-apple-ios $CARGO_FLAGS
 lipo -info ${TARGET_DIR}/x86_64-apple-ios/${BUILD_MODE}/${LIB_NAME}
+ls -lh ${TARGET_DIR}/x86_64-apple-ios/${BUILD_MODE}/${LIB_NAME}
 
 lipo -create ${TARGET_DIR}/aarch64-apple-ios/${BUILD_MODE}/${LIB_NAME} \
     ${TARGET_DIR}/x86_64-apple-ios/${BUILD_MODE}/${LIB_NAME} \
     -output ${TARGET_DIR}/${BUILD_MODE}/${LIB_NAME}
 lipo -info ${TARGET_DIR}/${BUILD_MODE}/${LIB_NAME}
+ls -lh ${TARGET_DIR}/${BUILD_MODE}/${LIB_NAME}
