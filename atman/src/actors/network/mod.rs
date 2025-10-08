@@ -30,7 +30,6 @@ impl actman::Actor for Actor {
                     match ctrl {
                         actman::Control::Shutdown => {
                             info!("Actor received shutdown control.");
-                            self.shutdown().await;
                             break;
                         },
                     }
