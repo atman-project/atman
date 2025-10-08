@@ -30,7 +30,7 @@ impl actman::Actor for Actor {
                     match ctrl {
                         actman::Control::Shutdown => {
                             info!("Actor received shutdown control.");
-                            return;
+                            break;
                         },
                     }
                 }
@@ -42,10 +42,12 @@ impl actman::Actor for Actor {
                 }
                 else => {
                     warn!("All channels closed, terminating actor.");
-                    return;
+                    break;
                 }
             }
         }
+
+        self.shutdown().await;
     }
 }
 
@@ -87,6 +89,14 @@ impl Actor {
             echo_event_receiver,
             sync_event_receiver,
         })
+    }
+
+    async fn shutdown(self) {
+        info!("shutting down the network actor.");
+        if let Err(e) = self.router.shutdown().await {
+            error!("error while shutting down the network router: {e:?}");
+        }
+        info!("network actor shut down.");
     }
 
     async fn handle_message(&self, message: Message) {
