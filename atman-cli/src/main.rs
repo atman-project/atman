@@ -2,6 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 
 use atman::{
     Atman, Error, NetworkConfig, RestConfig, SyncConfig,
+    config::secret_key_from_hex,
     doc::{DocId, DocSpace},
     sync_message,
 };
@@ -220,6 +221,8 @@ async fn handle_get_document(
 #[derive(Debug, Parser)]
 struct Args {
     #[clap(long)]
+    identity: String,
+    #[clap(long)]
     network_key: Option<String>,
     #[clap(long)]
     rest_addr: Option<SocketAddr>,
@@ -233,6 +236,9 @@ struct Args {
 
 impl Args {
     fn to_config(&self) -> Result<atman::Config, Error> {
+        let identity = secret_key_from_hex(self.identity.as_bytes())
+            .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+
         let network_key = match &self.network_key {
             Some(key) => Some(
                 iroh::SecretKey::from_str(key.as_str())
@@ -242,6 +248,7 @@ impl Args {
         };
 
         Ok(atman::Config {
+            identity,
             network: NetworkConfig { key: network_key },
             sync: SyncConfig {
                 syncman_dir: PathBuf::from(&self.syncman_dir),

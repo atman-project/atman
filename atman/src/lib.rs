@@ -16,6 +16,8 @@ pub use crate::actors::{
 
 mod actors;
 pub mod binding;
+pub mod config;
+pub use config::Config;
 pub mod doc;
 
 pub struct Atman {
@@ -156,14 +158,6 @@ pub enum Error {
     Http(#[from] rest::Error),
     #[error("Invalid config: {0}")]
     InvalidConfig(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    pub network: network::Config,
-    pub sync: sync::Config,
-    #[cfg(feature = "rest")]
-    pub rest: rest::Config,
 }
 
 #[expect(

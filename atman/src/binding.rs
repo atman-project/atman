@@ -15,6 +15,7 @@ use tracing::{debug, error, info};
 use crate::{
     Atman, Command, Config,
     actors::{network, sync},
+    config::secret_key_from_hex,
 };
 
 static ASYNC_RUNTIME: OnceCell<Runtime> = OnceCell::new();
@@ -39,13 +40,25 @@ fn init_tracing_subscriber() {
 /// # Safety
 /// `syncman_dir` must be a valid null-terminated C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn run_atman(syncman_dir: *const c_char) -> c_ushort {
+pub unsafe extern "C" fn run_atman(
+    identity: *const c_char,
+    syncman_dir: *const c_char,
+) -> c_ushort {
     init_tracing_subscriber();
 
     if COMMAND_SENDER.get().is_some() {
         error!("Atman has been already initialized");
         return 1;
     }
+
+    let identity = unsafe { CStr::from_ptr(identity) }
+        .to_str()
+        .expect("Invalid UTF-8 string for identity")
+        .as_bytes();
+    let Ok(identity) = secret_key_from_hex(identity) else {
+        error!("Invalid identity");
+        return 1;
+    };
 
     let syncman_dir = unsafe { CStr::from_ptr(syncman_dir) }
         .to_str()
@@ -54,6 +67,7 @@ pub unsafe extern "C" fn run_atman(syncman_dir: *const c_char) -> c_ushort {
 
     info!("Initializing Atman...");
     let (atman, command_sender) = match Atman::new(Config {
+        identity,
         network: network::Config { key: None },
         sync: sync::Config {
             syncman_dir: PathBuf::from(syncman_dir),
