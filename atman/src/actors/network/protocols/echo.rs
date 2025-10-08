@@ -1,18 +1,19 @@
-use std::time::Duration;
-
 use iroh::{
     NodeId,
-    endpoint::Connection,
+    endpoint::{Connection, RecvStream, SendStream},
     protocol::{AcceptError, ProtocolHandler, Router},
 };
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
-    sync::mpsc,
+    sync::{mpsc, oneshot},
 };
 use tracing::{error, info};
 
-use crate::actors::network::Error;
+use crate::actors::network::{
+    Error,
+    protocols::{close_conn, connect},
+};
 
 #[derive(Debug, Clone)]
 pub struct Protocol {
@@ -102,57 +103,56 @@ impl Protocol {
         }
     }
 
-    pub async fn connect_and_spawn(node_id: NodeId, router: &Router) -> Result<(), Error> {
-        let conn = router.endpoint().connect(node_id, Self::ALPN).await?;
-        let (mut send_stream, mut recv_stream) = conn.open_bi().await?;
+    pub async fn connect_and_spawn(
+        node_id: NodeId,
+        router: &Router,
+        reply_sender: oneshot::Sender<Result<(), Error>>,
+    ) {
+        let (conn, mut send_stream, mut recv_stream) =
+            match connect(node_id, router, Self::ALPN).await {
+                Ok(streams) => streams,
+                Err(e) => {
+                    let _ = reply_sender
+                        .send(Err(e))
+                        .inspect_err(|_| error!("failed to send reply"));
+                    return;
+                }
+            };
         info!("Stream opened");
+
         tokio::spawn(async move {
-            for i in 0..10 {
-                info!("Writing data to stream: {i}");
-                let data = format!("Hello echo {i}");
-                if let Err(e) = send_stream.write_u64(data.len() as u64).await {
-                    error!("Failed to send data: {e}");
-                    return;
-                }
-                if let Err(e) = send_stream.write_all(data.as_bytes()).await {
-                    error!("Failed to send data: {e}");
-                    return;
-                }
-
-                info!("Reading data from stream");
-                match recv_stream.read_u64().await {
-                    Ok(len) => {
-                        info!("Received length: {len}");
-                        let mut buf = vec![0u8; len as usize];
-                        if let Err(e) = recv_stream.read_exact(&mut buf).await {
-                            error!("Failed to read stream: {e}");
-                            return;
-                        }
-                        info!("Received data: {:?}", String::from_utf8_lossy(&buf));
-                    }
-                    Err(e) => {
-                        error!("Failed to read length from stream: {e}");
-                        return;
-                    }
-                }
-            }
-
-            if let Err(e) = send_stream.write_u64(0).await {
-                error!("Failed to send final length: {e}");
-                return;
-            }
-            info!("Sent final length");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-
-            if let Err(e) = send_stream.finish() {
-                error!("Failed to finish send_stream: {e}");
-                return;
-            }
-            info!("Closing conn");
-            conn.close(1u8.into(), b"done");
+            let result = perform_echo(&mut send_stream, &mut recv_stream)
+                .await
+                .inspect_err(|e| error!("Failed to perform sync: {e:?}"));
+            close_conn(&conn, &mut send_stream, result.is_err()).await;
+            let _ = reply_sender
+                .send(result)
+                .inspect_err(|_| error!("failed to send reply"));
         });
-        Ok(())
     }
+}
+
+async fn perform_echo(
+    send_stream: &mut SendStream,
+    recv_stream: &mut RecvStream,
+) -> Result<(), Error> {
+    for i in 0..10 {
+        info!("Writing data to stream: {i}");
+        let data = format!("Hello echo {i}");
+        send_stream.write_u64(data.len() as u64).await?;
+        send_stream.write_all(data.as_bytes()).await?;
+
+        info!("Reading data from stream");
+        let len = recv_stream.read_u64().await?;
+        info!("Received length: {len}");
+        let mut buf = vec![0u8; len as usize];
+        recv_stream.read_exact(&mut buf).await?;
+        info!("Received data: {:?}", String::from_utf8_lossy(&buf));
+    }
+
+    send_stream.write_u64(0).await?;
+    info!("Sent final length");
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,6 +1,8 @@
 use std::io;
 
-use iroh::endpoint::{BindError, ConnectError, ConnectionError, ReadExactError, WriteError};
+use iroh::endpoint::{
+    BindError, ClosedStream, ConnectError, ConnectionError, ReadExactError, WriteError,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -42,6 +44,12 @@ impl From<ConnectionError> for Error {
 
 impl From<BindError> for Error {
     fn from(e: BindError) -> Self {
+        Self::Network(e.into())
+    }
+}
+
+impl From<ClosedStream> for Error {
+    fn from(e: ClosedStream) -> Self {
         Self::Network(e.into())
     }
 }
