@@ -31,7 +31,7 @@ impl actman::Actor for Actor {
                         actman::Control::Shutdown => {
                             info!("Actor received shutdown control.");
                             self.shutdown().await;
-                            return;
+                            break;
                         },
                     }
                 }
@@ -43,11 +43,12 @@ impl actman::Actor for Actor {
                 }
                 else => {
                     warn!("All channels closed, terminating actor.");
-                    self.shutdown().await;
-                    return;
+                    break;
                 }
             }
         }
+
+        self.shutdown().await;
     }
 }
 
