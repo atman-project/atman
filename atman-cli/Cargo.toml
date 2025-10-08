@@ -1,16 +1,16 @@
 [package]
-authors     = ["Youngjoon Lee"]
+authors     = { workspace = true }
 description = "Command-line interface for Atman"
-edition     = "2024"
-homepage    = "https://github.com/atman-project"
-license     = "Apache-2.0"
+edition     = { workspace = true }
+homepage    = { workspace = true }
+license     = { workspace = true }
 name        = "atman-cli"
-readme      = "README.md"
-repository  = "https://github.com/atman-project/atman"
+readme      = { workspace = true }
+repository  = { workspace = true }
 version     = "0.1.0"
 
 [dependencies]
-atman              = { path = "../atman" }
+atman              = { path = "../atman", features = ["rest"] }
 clap               = { version = "4", features = ["derive"] }
 iroh               = { workspace = true }
 qrcode             = "0.14"

@@ -1,14 +1,17 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 
 use atman::{
-    Atman, Error, NetworkConfig, SyncConfig,
+    Atman, Error, NetworkConfig, RestConfig, SyncConfig,
     doc::{DocId, DocSpace},
     sync_message,
 };
 use clap::Parser;
 use iroh::NodeId;
 use qrcode::{QrCode, QrResult, render::unicode};
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    signal,
+    sync::{mpsc, oneshot},
+};
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -38,20 +41,22 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         .await
         .expect("ready channel shouldn't be closed")?;
 
-    if let Some(command) = args.command {
-        match command {
-            Command::Status => {
-                handle_status(&command_sender).await;
-            }
-            Command::ConnectAndEcho { node_id } => {
-                handle_connect_and_echo(&command_sender, node_id).await;
-            }
-            Command::ConnectAndSync { node_id } => {
-                handle_connect_and_sync(&command_sender, node_id).await;
-            }
-            Command::GetDocument { doc_space, doc_id } => {
-                handle_get_document(&command_sender, doc_space, doc_id).await;
-            }
+    match args.command {
+        Command::Daemonize => {
+            handle_status(&command_sender).await;
+            daemonize().await;
+        }
+        Command::Status => {
+            handle_status(&command_sender).await;
+        }
+        Command::ConnectAndEcho { node_id } => {
+            handle_connect_and_echo(&command_sender, node_id).await;
+        }
+        Command::ConnectAndSync { node_id } => {
+            handle_connect_and_sync(&command_sender, node_id).await;
+        }
+        Command::GetDocument { doc_space, doc_id } => {
+            handle_get_document(&command_sender, doc_space, doc_id).await;
         }
     }
 
@@ -66,6 +71,31 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         error!("Failed to wait until Atman is terminated: {e}");
     }
     Ok(())
+}
+
+/// A future that resolves when a termination signal is received.
+async fn daemonize() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 }
 
 async fn handle_status(command_sender: &mpsc::Sender<atman::Command>) {
@@ -91,11 +121,12 @@ async fn handle_status(command_sender: &mpsc::Sender<atman::Command>) {
         serde_json::to_string_pretty(&status).expect("Status should be serializable")
     );
 
-    match generate_qr(status.node_id.to_string().as_bytes()) {
+    match generate_qr(
+        serde_json::to_string(&status)
+            .expect("Status should be serializable")
+            .as_bytes(),
+    ) {
         Ok(code) => {
-            println!("============================");
-            println!(" Node ID -- QR Code");
-            println!("============================");
             println!("{code}");
         }
         Err(e) => {
@@ -191,9 +222,11 @@ struct Args {
     #[clap(long)]
     network_key: Option<String>,
     #[clap(long)]
+    rest_addr: Option<SocketAddr>,
+    #[clap(long)]
     syncman_dir: String,
     #[clap(subcommand)]
-    command: Option<Command>,
+    command: Command,
     #[clap(long, default_value_t = false)]
     overwrite: bool,
 }
@@ -214,12 +247,16 @@ impl Args {
                 syncman_dir: PathBuf::from(&self.syncman_dir),
                 overwrite: self.overwrite,
             },
+            rest: self
+                .rest_addr
+                .map_or(Default::default(), |addr| RestConfig { addr }),
         })
     }
 }
 
 #[derive(Debug, Parser)]
 enum Command {
+    Daemonize,
     Status,
     ConnectAndEcho { node_id: NodeId },
     ConnectAndSync { node_id: NodeId },

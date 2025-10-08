@@ -59,6 +59,8 @@ pub unsafe extern "C" fn run_atman(syncman_dir: *const c_char) -> c_ushort {
             syncman_dir: PathBuf::from(syncman_dir),
             overwrite: false,
         },
+        #[cfg(feature = "rest")]
+        rest: Default::default(),
     }) {
         Ok(result) => result,
         Err(e) => {
