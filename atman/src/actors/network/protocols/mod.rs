@@ -28,7 +28,7 @@ async fn connect(
 /// - close the connection
 async fn close_conn(conn: &Connection, send_stream: &mut SendStream, with_err: bool) {
     let code = if with_err { 1u8 } else { 0u8 };
-    info!("closing conn: code:{code}");
+    info!("closing dialer conn: code:{code}");
     if let Err(e) = send_stream.flush().await {
         error!("failed to flush the send stream: {e}");
     }
@@ -37,4 +37,14 @@ async fn close_conn(conn: &Connection, send_stream: &mut SendStream, with_err: b
     }
     let _ = send_stream.stopped().await;
     conn.close(code.into(), b"");
+}
+
+/// Wait until the connection is closed by the remote peer.
+async fn wait_conn_closed(conn: &Connection, send_stream: &mut SendStream) {
+    info!("waiting for the connection to be closed by remote");
+    if let Err(e) = send_stream.finish() {
+        error!("failed to finish the send stream: {e}");
+    }
+    conn.closed().await;
+    info!("connection closed by remote");
 }

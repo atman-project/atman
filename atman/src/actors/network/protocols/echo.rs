@@ -12,7 +12,7 @@ use tracing::{error, info};
 
 use crate::actors::network::{
     Error,
-    protocols::{close_conn, connect},
+    protocols::{close_conn, connect, wait_conn_closed},
 };
 
 #[derive(Debug, Clone)]
@@ -72,15 +72,7 @@ impl Protocol {
             return Err(AcceptError::from_err(e));
         }
 
-        // By calling `finish` on the send stream we signal that we will not send
-        // anything further, which makes the receive stream on the other end
-        // terminate.
-        send.finish()?;
-
-        // Wait until the remote closes the connection, which it does once it
-        // received the response.
-        connection.closed().await;
-        info!("Connection closed by remote");
+        wait_conn_closed(connection, &mut send).await;
         Ok(())
     }
 
