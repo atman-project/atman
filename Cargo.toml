@@ -2,6 +2,14 @@
 members  = ["atman", "atman-cli"]
 resolver = "3"
 
+[workspace.package]
+authors    = ["Youngjoon Lee"]
+edition    = "2024"
+homepage   = "https://github.com/atman-project"
+license    = "Apache-2.0"
+readme     = "README.md"
+repository = "https://github.com/atman-project/atman"
+
 [workspace.dependencies]
 iroh               = "0.90"
 serde              = "1"

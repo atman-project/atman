@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
 
+#[cfg(feature = "rest")]
+use crate::actors::rest;
+#[cfg(feature = "rest")]
+pub use crate::actors::rest::Config as RestConfig;
 use crate::actors::{network, sync};
 pub use crate::actors::{
     network::Config as NetworkConfig,
@@ -60,6 +64,20 @@ impl Atman {
                 }
             };
         let network_handle = runner.run(network_actor);
+
+        #[cfg(feature = "rest")]
+        let _rest_handle = runner.run(
+            match rest::Actor::new(&self.config.rest, network_handle.clone()).await {
+                Ok(actor) => actor,
+                Err(e) => {
+                    error!("Failed to create REST actor: {e:?}");
+                    ready_sender
+                        .send(Err(e.into()))
+                        .expect("Failed to send ready signal");
+                    return;
+                }
+            },
+        );
 
         ready_sender
             .send(Ok(()))
@@ -133,6 +151,9 @@ pub enum Error {
     Network(#[from] network::Error),
     #[error("Sync error: {0}")]
     Sync(#[from] sync::Error),
+    #[cfg(feature = "rest")]
+    #[error("Sync error: {0}")]
+    Http(#[from] rest::Error),
     #[error("Invalid config: {0}")]
     InvalidConfig(String),
 }
@@ -141,6 +162,8 @@ pub enum Error {
 pub struct Config {
     pub network: network::Config,
     pub sync: sync::Config,
+    #[cfg(feature = "rest")]
+    pub rest: rest::Config,
 }
 
 #[expect(
