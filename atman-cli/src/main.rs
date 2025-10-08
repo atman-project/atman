@@ -9,7 +9,7 @@ use clap::Parser;
 use iroh::NodeId;
 use qrcode::{QrCode, QrResult, render::unicode};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{Level, debug, error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
