@@ -27,4 +27,3 @@ jobs:
           cd atman
           bash build_bindings.sh
           cd -
-          ls -lh target/**/libatman.a
