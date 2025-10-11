@@ -15,6 +15,7 @@ use tracing::{debug, error, info};
 use crate::{
     Atman, Command, Config,
     actors::{network, sync},
+    config::secret_key_from_hex,
 };
 
 static ASYNC_RUNTIME: OnceCell<Runtime> = OnceCell::new();
@@ -39,13 +40,25 @@ fn init_tracing_subscriber() {
 /// # Safety
 /// `syncman_dir` must be a valid null-terminated C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn run_atman(syncman_dir: *const c_char) -> c_ushort {
+pub unsafe extern "C" fn run_atman(
+    identity: *const c_char,
+    syncman_dir: *const c_char,
+) -> c_ushort {
     init_tracing_subscriber();
 
     if COMMAND_SENDER.get().is_some() {
         error!("Atman has been already initialized");
         return 1;
     }
+
+    let identity = unsafe { CStr::from_ptr(identity) }
+        .to_str()
+        .expect("Invalid UTF-8 string for identity")
+        .as_bytes();
+    let Ok(identity) = secret_key_from_hex(identity) else {
+        error!("Invalid identity");
+        return 1;
+    };
 
     let syncman_dir = unsafe { CStr::from_ptr(syncman_dir) }
         .to_str()
@@ -54,10 +67,10 @@ pub unsafe extern "C" fn run_atman(syncman_dir: *const c_char) -> c_ushort {
 
     info!("Initializing Atman...");
     let (atman, command_sender) = match Atman::new(Config {
+        identity,
         network: network::Config { key: None },
         sync: sync::Config {
             syncman_dir: PathBuf::from(syncman_dir),
-            overwrite: false,
         },
         #[cfg(feature = "rest")]
         rest: Default::default(),
@@ -121,10 +134,22 @@ pub unsafe extern "C" fn send_atman_connect_and_sync_command(cmd: ConnectAndSync
             return;
         }
     };
+    let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
+    let Ok(doc_space) = doc_space.try_into() else {
+        error!("Invalid doc_space");
+        return;
+    };
+    let doc_id = unsafe { std::slice::from_raw_parts(cmd.doc_id, cmd.doc_id_len) };
+    let Ok(doc_id) = doc_id.try_into() else {
+        error!("Invalid doc_id");
+        return;
+    };
 
     let (reply_sender, reply_receiver) = oneshot::channel();
     send_command(Command::ConnectAndSync {
         node_id,
+        doc_space,
+        doc_id,
         reply_sender,
     });
 
@@ -139,6 +164,10 @@ pub unsafe extern "C" fn send_atman_connect_and_sync_command(cmd: ConnectAndSync
 pub struct ConnectAndSyncCommand {
     pub node_id: *const u8,
     pub node_id_len: usize,
+    pub doc_space: *const u8,
+    pub doc_space_len: usize,
+    pub doc_id: *const u8,
+    pub doc_id_len: usize,
 }
 
 /// Send a [`SyncUpdateCommand`] to Atman.
@@ -149,12 +178,20 @@ pub struct ConnectAndSyncCommand {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_sync_update_command(cmd: SyncUpdateCommand) {
     let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
+    let Ok(doc_space) = doc_space.try_into() else {
+        error!("Invalid doc_space");
+        return;
+    };
     let doc_id = unsafe { std::slice::from_raw_parts(cmd.doc_id, cmd.doc_id_len) };
+    let Ok(doc_id) = doc_id.try_into() else {
+        error!("Invalid doc_id");
+        return;
+    };
     let data = unsafe { std::slice::from_raw_parts(cmd.data, cmd.data_len) };
 
     let (msg, reply_receiver) = crate::actors::sync::message::UpdateMessage {
-        doc_space: String::from_utf8_lossy(doc_space).to_string().into(),
-        doc_id: String::from_utf8_lossy(doc_id).to_string().into(),
+        doc_space,
+        doc_id,
         data: data.to_vec(),
     }
     .into();
@@ -185,13 +222,28 @@ pub struct SyncUpdateCommand {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_sync_list_insert_command(cmd: SyncListInsertCommand) {
     let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
+    let Ok(doc_space) = doc_space.try_into() else {
+        error!("Invalid doc_space");
+        return;
+    };
+    let collection_doc_id =
+        unsafe { std::slice::from_raw_parts(cmd.collection_doc_id, cmd.collection_doc_id_len) };
+    let Ok(collection_doc_id) = collection_doc_id.try_into() else {
+        error!("Invalid collection_doc_id");
+        return;
+    };
     let doc_id = unsafe { std::slice::from_raw_parts(cmd.doc_id, cmd.doc_id_len) };
+    let Ok(doc_id) = doc_id.try_into() else {
+        error!("Invalid doc_id");
+        return;
+    };
     let property = unsafe { std::slice::from_raw_parts(cmd.property, cmd.property_len) };
     let data = unsafe { std::slice::from_raw_parts(cmd.data, cmd.data_len) };
 
     let (msg, reply_receiver) = crate::actors::sync::message::ListInsertMessage {
-        doc_space: String::from_utf8_lossy(doc_space).to_string().into(),
-        doc_id: String::from_utf8_lossy(doc_id).to_string().into(),
+        doc_space,
+        collection_doc_id,
+        doc_id,
         property: String::from_utf8_lossy(property).to_string(),
         data: data.to_vec(),
         index: cmd.index,
@@ -210,6 +262,8 @@ pub unsafe extern "C" fn send_atman_sync_list_insert_command(cmd: SyncListInsert
 pub struct SyncListInsertCommand {
     pub doc_space: *const u8,
     pub doc_space_len: usize,
+    pub collection_doc_id: *const u8,
+    pub collection_doc_id_len: usize,
     pub doc_id: *const u8,
     pub doc_id_len: usize,
     pub property: *const u8,

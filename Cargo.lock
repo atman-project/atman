@@ -180,6 +180,8 @@ dependencies = [
  "automerge",
  "autosurgeon",
  "axum",
+ "ed25519-dalek",
+ "hex",
  "iroh",
  "once_cell",
  "serde",
@@ -899,6 +901,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "sha2",
+ "signature",
  "subtle",
  "zeroize",
 ]

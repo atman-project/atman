@@ -8,14 +8,19 @@ use tracing::{debug, error, info};
 use crate::actors::rest;
 #[cfg(feature = "rest")]
 pub use crate::actors::rest::Config as RestConfig;
-use crate::actors::{network, sync};
 pub use crate::actors::{
     network::Config as NetworkConfig,
     sync::{Config as SyncConfig, message as sync_message},
 };
+use crate::{
+    actors::{network, sync},
+    doc::{DocId, DocSpace},
+};
 
 mod actors;
 pub mod binding;
+pub mod config;
+pub use config::Config;
 pub mod doc;
 
 pub struct Atman {
@@ -100,11 +105,15 @@ impl Atman {
                     }
                     Command::ConnectAndSync {
                         node_id,
+                        doc_space,
+                        doc_id,
                         reply_sender,
                     } => {
                         network_handle
                             .send(network::Message::Sync {
                                 node_id,
+                                doc_space,
+                                doc_id,
                                 reply_sender,
                             })
                             .await
@@ -158,14 +167,6 @@ pub enum Error {
     InvalidConfig(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    pub network: network::Config,
-    pub sync: sync::Config,
-    #[cfg(feature = "rest")]
-    pub rest: rest::Config,
-}
-
 #[expect(
     clippy::large_enum_variant,
     reason = "Make AutomergeSyncHandle in sync::Message generic"
@@ -178,6 +179,8 @@ pub enum Command {
     },
     ConnectAndSync {
         node_id: NodeId,
+        doc_space: DocSpace,
+        doc_id: DocId,
         reply_sender: oneshot::Sender<Result<(), network::Error>>,
     },
     Sync(sync::message::Message),

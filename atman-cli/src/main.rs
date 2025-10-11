@@ -2,6 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 
 use atman::{
     Atman, Error, NetworkConfig, RestConfig, SyncConfig,
+    config::secret_key_from_hex,
     doc::{DocId, DocSpace},
     sync_message,
 };
@@ -52,8 +53,12 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         Command::ConnectAndEcho { node_id } => {
             handle_connect_and_echo(&command_sender, node_id).await;
         }
-        Command::ConnectAndSync { node_id } => {
-            handle_connect_and_sync(&command_sender, node_id).await;
+        Command::ConnectAndSync {
+            node_id,
+            doc_space,
+            doc_id,
+        } => {
+            handle_connect_and_sync(&command_sender, node_id, doc_space, doc_id).await;
         }
         Command::GetDocument { doc_space, doc_id } => {
             handle_get_document(&command_sender, doc_space, doc_id).await;
@@ -165,12 +170,19 @@ async fn handle_connect_and_echo(command_sender: &mpsc::Sender<atman::Command>, 
     }
 }
 
-async fn handle_connect_and_sync(command_sender: &mpsc::Sender<atman::Command>, node_id: NodeId) {
+async fn handle_connect_and_sync(
+    command_sender: &mpsc::Sender<atman::Command>,
+    node_id: NodeId,
+    doc_space: DocSpace,
+    doc_id: DocId,
+) {
     info!("Connecting to node {node_id} to sync");
     let (reply_sender, reply_receiver) = oneshot::channel();
     if let Err(e) = command_sender
         .send(atman::Command::ConnectAndSync {
             node_id,
+            doc_space,
+            doc_id,
             reply_sender,
         })
         .await
@@ -220,6 +232,8 @@ async fn handle_get_document(
 #[derive(Debug, Parser)]
 struct Args {
     #[clap(long)]
+    identity: String,
+    #[clap(long)]
     network_key: Option<String>,
     #[clap(long)]
     rest_addr: Option<SocketAddr>,
@@ -227,12 +241,13 @@ struct Args {
     syncman_dir: String,
     #[clap(subcommand)]
     command: Command,
-    #[clap(long, default_value_t = false)]
-    overwrite: bool,
 }
 
 impl Args {
     fn to_config(&self) -> Result<atman::Config, Error> {
+        let identity = secret_key_from_hex(self.identity.as_bytes())
+            .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+
         let network_key = match &self.network_key {
             Some(key) => Some(
                 iroh::SecretKey::from_str(key.as_str())
@@ -242,10 +257,10 @@ impl Args {
         };
 
         Ok(atman::Config {
+            identity,
             network: NetworkConfig { key: network_key },
             sync: SyncConfig {
                 syncman_dir: PathBuf::from(&self.syncman_dir),
-                overwrite: self.overwrite,
             },
             rest: self
                 .rest_addr
@@ -258,7 +273,16 @@ impl Args {
 enum Command {
     Daemonize,
     Status,
-    ConnectAndEcho { node_id: NodeId },
-    ConnectAndSync { node_id: NodeId },
-    GetDocument { doc_space: DocSpace, doc_id: DocId },
+    ConnectAndEcho {
+        node_id: NodeId,
+    },
+    ConnectAndSync {
+        node_id: NodeId,
+        doc_space: DocSpace,
+        doc_id: DocId,
+    },
+    GetDocument {
+        doc_space: DocSpace,
+        doc_id: DocId,
+    },
 }

@@ -10,6 +10,12 @@ pub enum Error {
     Network(Box<dyn std::error::Error + Send + Sync>),
     #[error("Sync actor error: {0}")]
     SyncActor(#[from] crate::actors::sync::Error),
+    #[error("Initial sync message was not generated")]
+    InitialSyncMessageNotGenerated,
+    #[error("Received unexpected finish message")]
+    UnexpectedFinishMessage,
+    #[error("Invalid doc space or id: {0}")]
+    InvalidDocSpaceId(#[from] std::string::FromUtf8Error),
 }
 
 impl From<io::Error> for Error {

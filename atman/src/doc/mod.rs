@@ -1,4 +1,5 @@
 pub mod aviation;
+pub mod protocol;
 
 use std::collections::HashMap;
 
@@ -11,19 +12,38 @@ pub struct DocSpace(String);
 
 impl From<String> for DocSpace {
     fn from(space: String) -> Self {
-        DocSpace(space)
+        Self(space)
     }
 }
 
-impl From<&'static str> for DocSpace {
-    fn from(space: &'static str) -> Self {
+impl TryFrom<&[u8]> for DocSpace {
+    type Error = std::string::FromUtf8Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let s = String::from_utf8(value.to_vec())?;
+        Ok(Self(s))
+    }
+}
+
+impl From<&str> for DocSpace {
+    fn from(space: &str) -> Self {
         space.to_string().into()
     }
 }
 
-impl PartialEq<&'static str> for DocSpace {
-    fn eq(&self, other: &&'static str) -> bool {
+impl PartialEq<&str> for DocSpace {
+    fn eq(&self, other: &&str) -> bool {
         self.0 == *other
+    }
+}
+
+impl DocSpace {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 
@@ -32,19 +52,38 @@ pub struct DocId(String);
 
 impl From<String> for DocId {
     fn from(id: String) -> Self {
-        DocId(id)
+        Self(id)
     }
 }
 
-impl From<&'static str> for DocId {
-    fn from(id: &'static str) -> Self {
+impl TryFrom<&[u8]> for DocId {
+    type Error = std::string::FromUtf8Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let s = String::from_utf8(value.to_vec())?;
+        Ok(Self(s))
+    }
+}
+
+impl From<&str> for DocId {
+    fn from(id: &str) -> Self {
         id.to_string().into()
     }
 }
 
-impl PartialEq<&'static str> for DocId {
-    fn eq(&self, other: &&'static str) -> bool {
+impl PartialEq<&str> for DocId {
+    fn eq(&self, other: &&str) -> bool {
         self.0 == *other
+    }
+}
+
+impl DocId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 
@@ -74,6 +113,18 @@ impl<S: Syncman> DocumentResolver<S> {
             aviation::flight::DOC_ID.into(),
             Document::deserialize_flight,
             Document::hydrate_flight,
+        );
+        this.register(
+            protocol::DOC_SPACE.into(),
+            protocol::node::DOC_ID.into(),
+            Document::deserialize_node,
+            Document::hydrate_node,
+        );
+        this.register(
+            protocol::DOC_SPACE.into(),
+            protocol::nodes::DOC_ID.into(),
+            Document::deserialize_nodes,
+            Document::hydrate_nodes,
         );
 
         this
@@ -139,6 +190,8 @@ impl<S: Syncman> Default for DocumentResolver<S> {
 pub enum Document {
     Flights(aviation::flights::Flights),
     Flight(aviation::flight::Flight),
+    Nodes(protocol::nodes::Nodes),
+    Node(protocol::node::Node),
 }
 
 impl Reconcile for Document {
@@ -148,6 +201,8 @@ impl Reconcile for Document {
         match self {
             Self::Flights(flights) => flights.reconcile(reconciler),
             Self::Flight(flight) => flight.reconcile(reconciler),
+            Self::Nodes(nodes) => nodes.reconcile(reconciler),
+            Self::Node(node) => node.reconcile(reconciler),
         }
     }
 }
@@ -157,6 +212,8 @@ impl Document {
         match self {
             Self::Flights(flights) => serde_json::to_vec(flights),
             Self::Flight(flight) => serde_json::to_vec(flight),
+            Self::Nodes(nodes) => serde_json::to_vec(nodes),
+            Self::Node(node) => serde_json::to_vec(node),
         }
     }
 
@@ -164,6 +221,8 @@ impl Document {
         match self {
             Self::Flights(flights) => serde_json::to_string_pretty(flights),
             Self::Flight(flight) => serde_json::to_string_pretty(flight),
+            Self::Nodes(nodes) => serde_json::to_string_pretty(nodes),
+            Self::Node(node) => serde_json::to_string_pretty(node),
         }
     }
 
@@ -185,6 +244,24 @@ impl Document {
 
     fn hydrate_flight<S: Syncman>(syncman: &S) -> Result<Self, Error> {
         Ok(Document::Flight(syncman.get::<aviation::flight::Flight>()))
+    }
+
+    fn deserialize_nodes(data: &[u8]) -> Result<Self, serde_json::Error> {
+        let nodes: protocol::nodes::Nodes = serde_json::from_slice(data)?;
+        Ok(Self::Nodes(nodes))
+    }
+
+    fn hydrate_nodes<S: Syncman>(syncman: &S) -> Result<Self, Error> {
+        Ok(Document::Nodes(syncman.get::<protocol::nodes::Nodes>()))
+    }
+
+    fn deserialize_node(data: &[u8]) -> Result<Self, serde_json::Error> {
+        let node: protocol::node::Node = serde_json::from_slice(data)?;
+        Ok(Self::Node(node))
+    }
+
+    fn hydrate_node<S: Syncman>(syncman: &S) -> Result<Self, Error> {
+        Ok(Document::Node(syncman.get::<protocol::node::Node>()))
     }
 }
 
@@ -231,6 +308,37 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(doc, Document::Flight(_)));
+    }
+
+    #[test]
+    fn deserialize_nodes() {
+        let data = r#"{"nodes":[{"id":"id0","signature":"sig0"}]}"#;
+        let resolver = DocumentResolver::<MockSyncman>::new();
+        let doc = resolver
+            .deserialize(
+                &protocol::DOC_SPACE.into(),
+                &protocol::nodes::DOC_ID.into(),
+                data.as_bytes(),
+            )
+            .unwrap();
+        let Document::Nodes(nodes) = doc else {
+            panic!("Expected Nodes document");
+        };
+        assert_eq!(nodes.nodes().collect::<Vec<_>>().len(), 1);
+    }
+
+    #[test]
+    fn deserialize_node() {
+        let data = r#"{"id":"id0","signature":"sig0"}"#;
+        let resolver = DocumentResolver::<MockSyncman>::new();
+        let doc = resolver
+            .deserialize(
+                &protocol::DOC_SPACE.into(),
+                &protocol::node::DOC_ID.into(),
+                data.as_bytes(),
+            )
+            .unwrap();
+        assert!(matches!(doc, Document::Node(_)));
     }
 
     #[test]
