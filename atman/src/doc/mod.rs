@@ -12,19 +12,38 @@ pub struct DocSpace(String);
 
 impl From<String> for DocSpace {
     fn from(space: String) -> Self {
-        DocSpace(space)
+        Self(space)
     }
 }
 
-impl From<&'static str> for DocSpace {
-    fn from(space: &'static str) -> Self {
+impl TryFrom<&[u8]> for DocSpace {
+    type Error = std::string::FromUtf8Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let s = String::from_utf8(value.to_vec())?;
+        Ok(Self(s))
+    }
+}
+
+impl From<&str> for DocSpace {
+    fn from(space: &str) -> Self {
         space.to_string().into()
     }
 }
 
-impl PartialEq<&'static str> for DocSpace {
-    fn eq(&self, other: &&'static str) -> bool {
+impl PartialEq<&str> for DocSpace {
+    fn eq(&self, other: &&str) -> bool {
         self.0 == *other
+    }
+}
+
+impl DocSpace {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 
@@ -33,19 +52,38 @@ pub struct DocId(String);
 
 impl From<String> for DocId {
     fn from(id: String) -> Self {
-        DocId(id)
+        Self(id)
     }
 }
 
-impl From<&'static str> for DocId {
-    fn from(id: &'static str) -> Self {
+impl TryFrom<&[u8]> for DocId {
+    type Error = std::string::FromUtf8Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let s = String::from_utf8(value.to_vec())?;
+        Ok(Self(s))
+    }
+}
+
+impl From<&str> for DocId {
+    fn from(id: &str) -> Self {
         id.to_string().into()
     }
 }
 
-impl PartialEq<&'static str> for DocId {
-    fn eq(&self, other: &&'static str) -> bool {
+impl PartialEq<&str> for DocId {
+    fn eq(&self, other: &&str) -> bool {
         self.0 == *other
+    }
+}
+
+impl DocId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 

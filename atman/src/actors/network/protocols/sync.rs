@@ -1,4 +1,7 @@
-use std::fmt::{self, Debug, Formatter};
+use std::{
+    fmt::{self, Debug, Formatter},
+    io,
+};
 
 use iroh::{
     NodeId,
@@ -13,9 +16,13 @@ use tokio::{
 };
 use tracing::{error, info};
 
-use crate::actors::network::{
-    Error,
-    protocols::{close_conn, connect, wait_conn_closed},
+use crate::{
+    actors::network::{
+        Error,
+        protocols::{close_conn, connect, wait_conn_closed},
+    },
+    doc::{DocId, DocSpace},
+    sync_message::InitiateSyncMessage,
 };
 
 #[derive(Clone)]
@@ -83,8 +90,9 @@ impl Protocol {
         let (mut send, mut recv) = connection.accept_bi().await?;
         info!("Accepted stream");
 
-        if let Err(e) = perform_sync(&self.sync_actor_handle, &mut send, &mut recv, false).await {
-            error!("Failed to sync: {e}");
+        if let Err(e) = listen_and_perform_sync(&self.sync_actor_handle, &mut send, &mut recv).await
+        {
+            error!("Failed to listen and perform sync: {e}");
             return Err(AcceptError::from_err(e));
         }
 
@@ -94,6 +102,8 @@ impl Protocol {
 
     pub async fn connect_and_spawn(
         node_id: NodeId,
+        doc_space: DocSpace,
+        doc_id: DocId,
         router: &Router,
         sync_actor_handle: &actman::Handle<crate::sync::Actor>,
         reply_sender: oneshot::Sender<Result<(), Error>>,
@@ -112,9 +122,15 @@ impl Protocol {
 
         let sync_actor_handle = sync_actor_handle.clone();
         tokio::spawn(async move {
-            let result = perform_sync(&sync_actor_handle, &mut send_stream, &mut recv_stream, true)
-                .await
-                .inspect_err(|e| error!("Failed to perform sync: {e:?}"));
+            let result = trigger_and_perform_sync(
+                &sync_actor_handle,
+                doc_space,
+                doc_id,
+                &mut send_stream,
+                &mut recv_stream,
+            )
+            .await
+            .inspect_err(|e| error!("Failed to perform sync: {e:?}"));
             close_conn(&conn, &mut send_stream, result.is_err()).await;
             let _ = reply_sender
                 .send(result)
@@ -123,8 +139,54 @@ impl Protocol {
     }
 }
 
+async fn trigger_and_perform_sync<SendStream, RecvStream>(
+    sync_actor_handle: &actman::Handle<crate::sync::Actor>,
+    doc_space: DocSpace,
+    doc_id: DocId,
+    send_stream: &mut SendStream,
+    recv_stream: &mut RecvStream,
+) -> Result<(), Error>
+where
+    SendStream: AsyncWriteExt + Unpin,
+    RecvStream: AsyncReadExt + Unpin,
+{
+    send_doc_space_and_id(&doc_space, &doc_id, send_stream).await?;
+    perform_sync(
+        sync_actor_handle,
+        doc_space,
+        doc_id,
+        send_stream,
+        recv_stream,
+        true,
+    )
+    .await
+}
+
+async fn listen_and_perform_sync<SendStream, RecvStream>(
+    sync_actor_handle: &actman::Handle<crate::sync::Actor>,
+    send_stream: &mut SendStream,
+    recv_stream: &mut RecvStream,
+) -> Result<(), Error>
+where
+    SendStream: AsyncWriteExt + Unpin,
+    RecvStream: AsyncReadExt + Unpin,
+{
+    let (doc_space, doc_id) = read_doc_space_and_id(recv_stream).await?;
+    perform_sync(
+        sync_actor_handle,
+        doc_space,
+        doc_id,
+        send_stream,
+        recv_stream,
+        false,
+    )
+    .await
+}
+
 async fn perform_sync<SendStream, RecvStream>(
     sync_actor_handle: &actman::Handle<crate::sync::Actor>,
+    doc_space: DocSpace,
+    doc_id: DocId,
     send_stream: &mut SendStream,
     recv_stream: &mut RecvStream,
     as_trigger: bool,
@@ -133,18 +195,20 @@ where
     SendStream: AsyncWriteExt + Unpin,
     RecvStream: AsyncReadExt + Unpin,
 {
-    let (reply_sender, reply_receiver) = oneshot::channel();
-    sync_actor_handle
-        .send(crate::sync::message::Message::InitiateSync { reply_sender })
-        .await;
-    let mut sync_handle = reply_receiver.await.expect("Sync actor must be available");
+    let (msg, reply_receiver) = InitiateSyncMessage { doc_space, doc_id }.into();
+    sync_actor_handle.send(msg).await;
+    let mut sync_handle = reply_receiver
+        .await
+        .expect("Sync actor must be available")?;
 
-    if as_trigger && !generate_and_send_sync_msg(&mut sync_handle, send_stream).await? {
-        return Ok(());
+    if as_trigger
+        && !generate_and_send_sync_msg(sync_handle.syncman_handle_mut(), send_stream).await?
+    {
+        return Err(Error::InitialSyncMessageNotGenerated);
     }
 
     loop {
-        match read_msg(recv_stream).await? {
+        match read_sync_msg(recv_stream).await? {
             Some(msg) => {
                 info!("Received sync message of length {}", msg.len());
                 let (reply_sender, reply_receiver) = oneshot::channel();
@@ -165,7 +229,7 @@ where
             }
         }
 
-        if !generate_and_send_sync_msg(&mut sync_handle, send_stream).await? {
+        if !generate_and_send_sync_msg(sync_handle.syncman_handle_mut(), send_stream).await? {
             return Ok(());
         }
     }
@@ -182,50 +246,96 @@ where
     Stream: AsyncWriteExt + Unpin,
 {
     if let Some(msg) = sync_handle.generate_message() {
-        send_msg(&msg, send_stream).await?;
+        send_sync_msg(&msg, send_stream).await?;
         Ok(true)
     } else {
         info!("Nothing to sync. Syncing has been done.");
-        send_finish_msg(send_stream).await?;
+        send_finish(send_stream).await?;
         Ok(false)
     }
 }
 
-async fn send_msg<Stream>(msg: &[u8], stream: &mut Stream) -> Result<(), Error>
+async fn send_doc_space_and_id<Stream>(
+    doc_space: &DocSpace,
+    doc_id: &DocId,
+    stream: &mut Stream,
+) -> Result<(), Error>
+where
+    Stream: AsyncWriteExt + Unpin,
+{
+    send_data(doc_space.as_bytes(), stream).await?;
+    send_data(doc_id.as_bytes(), stream).await?;
+    Ok(())
+}
+
+async fn read_doc_space_and_id<Stream>(stream: &mut Stream) -> Result<(DocSpace, DocId), Error>
+where
+    Stream: AsyncReadExt + Unpin,
+{
+    let doc_space = read_data(stream)
+        .await?
+        .ok_or(Error::UnexpectedFinishMessage)?
+        .as_slice()
+        .try_into()?;
+    let doc_id = read_data(stream)
+        .await?
+        .ok_or(Error::UnexpectedFinishMessage)?
+        .as_slice()
+        .try_into()?;
+    Ok((doc_space, doc_id))
+}
+
+async fn send_sync_msg<Stream>(msg: &[u8], stream: &mut Stream) -> Result<(), Error>
 where
     Stream: AsyncWriteExt + Unpin,
 {
     if msg.is_empty() {
-        return send_finish_msg(stream).await;
+        return Ok(send_finish(stream).await?);
     }
 
     assert!(!msg.is_empty());
     info!("Sending sync message to peer: len:{}", msg.len());
-    stream.write_u64(msg.len() as u64).await?;
-    stream.write_all(msg).await?;
-    Ok(())
+    Ok(send_data(msg, stream).await?)
 }
 
-async fn send_finish_msg<Stream>(stream: &mut Stream) -> Result<(), Error>
-where
-    Stream: AsyncWriteExt + Unpin,
-{
-    info!("Sending sync finish message to peer");
-    stream.write_u64(0u64).await?;
-    Ok(())
-}
-
-async fn read_msg<Stream>(stream: &mut Stream) -> Result<Option<Vec<u8>>, Error>
+async fn read_sync_msg<Stream>(stream: &mut Stream) -> Result<Option<Vec<u8>>, Error>
 where
     Stream: AsyncReadExt + Unpin,
 {
     info!("Reading sync response from peer");
-    let len = stream.read_u64().await?;
+    Ok(read_data(stream).await?)
+}
+
+async fn send_data<Stream>(data: &[u8], stream: &mut Stream) -> io::Result<()>
+where
+    Stream: AsyncWriteExt + Unpin,
+{
+    let len: u64 = data.len().try_into().expect("data len must be u64");
+    stream.write_u64(len).await?;
+    stream.write_all(data).await?;
+    Ok(())
+}
+
+async fn send_finish<Stream>(stream: &mut Stream) -> io::Result<()>
+where
+    Stream: AsyncWriteExt + Unpin,
+{
+    stream.write_u64(0u64).await
+}
+
+async fn read_data<Stream>(stream: &mut Stream) -> io::Result<Option<Vec<u8>>>
+where
+    Stream: AsyncReadExt + Unpin,
+{
+    let len: usize = stream
+        .read_u64()
+        .await?
+        .try_into()
+        .expect("data len must be usize");
     if len == 0 {
-        info!("Received zero length");
         return Ok(None);
     }
-    let mut buf = vec![0u8; len as usize];
+    let mut buf = vec![0u8; len];
     stream.read_exact(&mut buf).await?;
     Ok(Some(buf))
 }
@@ -247,7 +357,7 @@ mod tests {
     use tempdir::TempDir;
 
     use super::*;
-    use crate::actors::sync;
+    use crate::{actors::sync, doc};
 
     #[test_log::test(tokio::test)]
     async fn test_sync() {
@@ -263,20 +373,36 @@ mod tests {
 
         // Run listener side
         let join_listener = tokio::spawn(async move {
-            perform_sync(
-                &sync_handle_1,
-                &mut listener_send,
-                &mut listener_recv,
-                false,
-            )
-            .await
+            listen_and_perform_sync(&sync_handle_1, &mut listener_send, &mut listener_recv)
+                .await
+                .expect("sync must succeeded");
         });
+
+        // Prepare a doc to sync
+        let doc_space: DocSpace = doc::protocol::DOC_SPACE.into();
+        let doc_id: DocId = doc::protocol::nodes::DOC_ID.into();
+        let doc = doc::Document::Nodes(doc::protocol::nodes::Nodes { nodes: Vec::new() });
+        let (msg, reply_receiver) = sync::message::UpdateMessage {
+            doc_space: doc_space.clone(),
+            doc_id: doc_id.clone(),
+            data: doc.serialize().unwrap(),
+        }
+        .into();
+        sync_handle_0.send(msg).await;
+        reply_receiver.await.unwrap().unwrap();
+
         // Run trigger side
-        perform_sync(&sync_handle_0, &mut trigger_send, &mut trigger_recv, true)
-            .await
-            .unwrap();
+        trigger_and_perform_sync(
+            &sync_handle_0,
+            doc_space,
+            doc_id,
+            &mut trigger_send,
+            &mut trigger_recv,
+        )
+        .await
+        .unwrap();
         // Wait for listener to finish without error.
-        let _ = join_listener.await.unwrap();
+        let () = join_listener.await.unwrap();
 
         runner.shutdown().await;
     }
@@ -284,7 +410,6 @@ mod tests {
     fn sync_config() -> sync::Config {
         sync::Config {
             syncman_dir: TempDir::new("network-sync-test").unwrap().into_path(),
-            overwrite: false,
         }
     }
 }

@@ -1,11 +1,10 @@
 use std::fmt::{self, Debug, Formatter};
 
 use serde::{Deserialize, Serialize};
-use syncman::automerge::AutomergeSyncHandle;
 use tokio::sync::oneshot;
 
 use crate::{
-    actors::sync::Error,
+    actors::sync::{Error, SyncHandle},
     doc::{DocId, DocSpace, Document},
 };
 
@@ -27,12 +26,13 @@ pub enum Message {
         reply_sender: oneshot::Sender<Result<Document, Error>>,
     },
     InitiateSync {
-        reply_sender: oneshot::Sender<AutomergeSyncHandle>,
+        msg: InitiateSyncMessage,
+        reply_sender: oneshot::Sender<Result<SyncHandle, Error>>,
     },
     ApplySync {
         data: Vec<u8>,
-        handle: AutomergeSyncHandle,
-        reply_sender: oneshot::Sender<Result<AutomergeSyncHandle, Error>>,
+        handle: SyncHandle,
+        reply_sender: oneshot::Sender<Result<SyncHandle, Error>>,
     },
 }
 
@@ -42,7 +42,7 @@ impl Debug for Message {
             Self::Update { msg, .. } => f.debug_tuple("Update").field(msg).finish(),
             Self::ListInsert { msg, .. } => f.debug_tuple("ListInsert").field(msg).finish(),
             Self::Get { msg, .. } => f.debug_tuple("Get").field(msg).finish(),
-            Self::InitiateSync { .. } => f.debug_tuple("InitiateSync").finish(),
+            Self::InitiateSync { msg, .. } => f.debug_tuple("InitiateSync").field(msg).finish(),
             Self::ApplySync { .. } => f.debug_tuple("ApplySync").finish(),
         }
     }
@@ -65,6 +65,7 @@ impl From<UpdateMessage> for (Message, oneshot::Receiver<Result<(), Error>>) {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListInsertMessage {
     pub doc_space: DocSpace,
+    pub collection_doc_id: DocId,
     pub doc_id: DocId,
     pub property: String,
     pub data: SerializedModel,
@@ -88,6 +89,19 @@ impl From<GetMessage> for (Message, oneshot::Receiver<Result<Document, Error>>) 
     fn from(msg: GetMessage) -> Self {
         let (reply_sender, reply_receiver) = oneshot::channel();
         (Message::Get { msg, reply_sender }, reply_receiver)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InitiateSyncMessage {
+    pub doc_space: DocSpace,
+    pub doc_id: DocId,
+}
+
+impl From<InitiateSyncMessage> for (Message, oneshot::Receiver<Result<SyncHandle, Error>>) {
+    fn from(msg: InitiateSyncMessage) -> Self {
+        let (reply_sender, reply_receiver) = oneshot::channel();
+        (Message::InitiateSync { msg, reply_sender }, reply_receiver)
     }
 }
 

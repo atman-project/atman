@@ -7,7 +7,10 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 pub use crate::actors::network::error::Error;
-use crate::actors::network::protocols::{echo, sync};
+use crate::{
+    actors::network::protocols::{echo, sync},
+    doc::{DocId, DocSpace},
+};
 
 pub struct Actor {
     router: Router,
@@ -107,8 +110,13 @@ impl Actor {
             } => self.handle_echo_message(node_id, reply_sender).await,
             Message::Sync {
                 node_id,
+                doc_space,
+                doc_id,
                 reply_sender,
-            } => self.handle_sync_message(node_id, reply_sender).await,
+            } => {
+                self.handle_sync_message(node_id, doc_space, doc_id, reply_sender)
+                    .await
+            }
             Message::Status { reply_sender } => {
                 let _ = reply_sender
                     .send(self.router.endpoint().node_id())
@@ -129,11 +137,15 @@ impl Actor {
     async fn handle_sync_message(
         &self,
         node_id: NodeId,
+        doc_space: DocSpace,
+        doc_id: DocId,
         reply_sender: oneshot::Sender<Result<(), Error>>,
     ) {
         debug!("Handling Sync message to {node_id}");
         sync::Protocol::connect_and_spawn(
             node_id,
+            doc_space,
+            doc_id,
             &self.router,
             &self.sync_actor_handle,
             reply_sender,
@@ -149,6 +161,8 @@ pub enum Message {
     },
     Sync {
         node_id: NodeId,
+        doc_space: DocSpace,
+        doc_id: DocId,
         reply_sender: oneshot::Sender<Result<(), Error>>,
     },
     Status {

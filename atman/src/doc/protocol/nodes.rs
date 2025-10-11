@@ -8,7 +8,7 @@ pub const DOC_ID: &str = "nodes";
 #[derive(Debug, Clone, Serialize, Deserialize, Reconcile, Hydrate, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Nodes {
-    nodes: Vec<Node>,
+    pub nodes: Vec<Node>,
 }
 
 impl Nodes {

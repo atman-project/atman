@@ -1,24 +1,24 @@
+mod config;
+mod handle;
 pub mod message;
 
-use std::{fmt::Debug, io, path::PathBuf};
+use std::{collections::HashMap, fmt::Debug, io, path::PathBuf};
 
-use serde::{Deserialize, Serialize};
-use syncman::{
-    Syncman,
-    automerge::{AutomergeSyncHandle, AutomergeSyncman},
-};
+pub use config::Config;
+pub use handle::SyncHandle;
+use syncman::{Syncman, automerge::AutomergeSyncman};
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
 use crate::{
-    doc::{self, Document, DocumentResolver},
+    doc::{self, DocId, DocSpace, Document, DocumentResolver},
     sync::message::Message,
-    sync_message::{GetMessage, ListInsertMessage, UpdateMessage},
+    sync_message::{GetMessage, InitiateSyncMessage, ListInsertMessage, UpdateMessage},
 };
 
 pub struct Actor {
     config: Config,
-    syncman: AutomergeSyncman,
+    syncmans: HashMap<(DocSpace, DocId), AutomergeSyncman>,
     doc_resolver: DocumentResolver<AutomergeSyncman>,
 }
 
@@ -53,18 +53,15 @@ impl Actor {
     pub fn new(config: Config) -> Result<Self, Error> {
         config.create_dirs()?;
 
-        let path = config.syncman_path();
-        let syncman = if !path.exists() || config.overwrite {
-            let mut syncman = AutomergeSyncman::new();
-            save_syncman(&mut syncman, &path)?;
-            syncman
-        } else {
-            load_syncman(&path)?
-        };
+        let mut syncmans = HashMap::new();
+        for (doc_space, doc_id, path) in config.syncman_paths()?.into_iter() {
+            let syncman = load_syncman(&path)?;
+            syncmans.insert((doc_space, doc_id), syncman);
+        }
 
         Ok(Self {
             config,
-            syncman,
+            syncmans,
             doc_resolver: DocumentResolver::new(),
         })
     }
@@ -77,8 +74,8 @@ impl Actor {
             }
 
             Message::Get { msg, reply_sender } => self.handle_get_message(msg, reply_sender),
-            Message::InitiateSync { reply_sender } => {
-                self.handle_initiate_sync_message(reply_sender)
+            Message::InitiateSync { msg, reply_sender } => {
+                self.handle_initiate_sync_message(msg, reply_sender)
             }
             Message::ApplySync {
                 data,
@@ -110,9 +107,13 @@ impl Actor {
         }: UpdateMessage,
     ) -> Result<(), Error> {
         let doc = self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
-        self.syncman.update(&doc);
+        let syncman = self
+            .syncmans
+            .entry((doc_space.clone(), doc_id.clone()))
+            .or_default();
+        syncman.update(&doc);
         info!("Document updated in syncman");
-        self.save()
+        save_syncman(syncman, &self.config.syncman_path(&doc_space, &doc_id))
     }
 
     fn handle_list_insert_message(
@@ -132,6 +133,7 @@ impl Actor {
         &mut self,
         ListInsertMessage {
             doc_space,
+            collection_doc_id,
             doc_id,
             property,
             data,
@@ -139,42 +141,78 @@ impl Actor {
         }: ListInsertMessage,
     ) -> Result<(), Error> {
         let doc = self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
-        let obj_id = self
-            .syncman
-            .get_object_id(self.syncman.root(), property.clone());
-        self.syncman.insert(obj_id, index, &doc);
+        let syncman = self
+            .syncmans
+            .get_mut(&(doc_space.clone(), collection_doc_id.clone()))
+            .ok_or(Error::DocumentNotFound {
+                doc_space: doc_space.clone(),
+                doc_id: collection_doc_id.clone(),
+            })?;
+        let obj_id = syncman.get_object_id(syncman.root(), property.clone());
+        syncman.insert(obj_id, index, &doc);
         info!("Inserted into a list. prop:{property}, index:{index}");
-        self.save()
+        save_syncman(
+            syncman,
+            &self.config.syncman_path(&doc_space, &collection_doc_id),
+        )
     }
 
     fn handle_get_message(
         &self,
-        GetMessage { doc_space, doc_id }: GetMessage,
+        msg: GetMessage,
         reply_sender: oneshot::Sender<Result<Document, Error>>,
     ) {
         let _ = reply_sender
             .send(
-                self.doc_resolver
-                    .hydrate(&doc_space, &doc_id, &self.syncman)
-                    .map_err(|e| {
-                        error!("Failed to handle get message: {e:?}");
-                        e.into()
-                    }),
+                self.handle_get_message_inner(msg)
+                    .inspect_err(|e| error!("Failed to handle get message: {e:?}")),
             )
             .inspect_err(|_| error!("Failed to send reply"));
     }
 
-    fn handle_initiate_sync_message(&mut self, reply_sender: oneshot::Sender<AutomergeSyncHandle>) {
+    fn handle_get_message_inner(
+        &self,
+        GetMessage { doc_space, doc_id }: GetMessage,
+    ) -> Result<Document, Error> {
+        let syncman = self
+            .syncmans
+            .get(&(doc_space.clone(), doc_id.clone()))
+            .ok_or(Error::DocumentNotFound {
+                doc_space: doc_space.clone(),
+                doc_id: doc_id.clone(),
+            })?;
+        Ok(self.doc_resolver.hydrate(&doc_space, &doc_id, syncman)?)
+    }
+
+    fn handle_initiate_sync_message(
+        &mut self,
+        msg: InitiateSyncMessage,
+        reply_sender: oneshot::Sender<Result<SyncHandle, Error>>,
+    ) {
         let _ = reply_sender
-            .send(self.syncman.initiate_sync())
+            .send(
+                self.handle_initiate_sync_message_inner(msg)
+                    .inspect_err(|e| error!("Failed to handle initiate sync message: {e:?}")),
+            )
             .inspect_err(|_| error!("Failed to send reply"));
+    }
+
+    fn handle_initiate_sync_message_inner(
+        &mut self,
+        InitiateSyncMessage { doc_space, doc_id }: InitiateSyncMessage,
+    ) -> Result<SyncHandle, Error> {
+        let syncman = self
+            .syncmans
+            .entry((doc_space.clone(), doc_id.clone()))
+            .or_default();
+        Ok(SyncHandle::new(syncman.initiate_sync(), doc_space, doc_id))
     }
 
     fn handle_apply_sync_message(
         &mut self,
         data: Vec<u8>,
-        handle: AutomergeSyncHandle,
-        reply_sender: oneshot::Sender<Result<AutomergeSyncHandle, Error>>,
+        handle: SyncHandle,
+        reply_sender: oneshot::Sender<Result<SyncHandle, Error>>,
     ) {
         let _ = reply_sender
             .send(
@@ -187,36 +225,19 @@ impl Actor {
     fn handle_apply_sync_message_inner(
         &mut self,
         data: Vec<u8>,
-        mut handle: AutomergeSyncHandle,
-    ) -> Result<AutomergeSyncHandle, Error> {
-        self.syncman.apply_sync(&mut handle, &data);
-        self.save()?;
+        mut handle: SyncHandle,
+    ) -> Result<SyncHandle, Error> {
+        let (doc_space, doc_id) = handle.doc_space_and_id();
+        let syncman = self
+            .syncmans
+            .get_mut(&(doc_space.clone(), doc_id.clone()))
+            .ok_or(Error::DocumentNotFound {
+                doc_space: doc_space.clone(),
+                doc_id: doc_id.clone(),
+            })?;
+        syncman.apply_sync(handle.syncman_handle_mut(), &data);
+        save_syncman(syncman, &self.config.syncman_path(&doc_space, &doc_id))?;
         Ok(handle)
-    }
-
-    fn save(&mut self) -> Result<(), Error> {
-        save_syncman(&mut self.syncman, &self.config.syncman_path())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    pub syncman_dir: PathBuf,
-    pub overwrite: bool,
-}
-
-impl Config {
-    fn create_dirs(&self) -> Result<(), Error> {
-        std::fs::create_dir_all(&self.syncman_dir).map_err(|e| Error::IO {
-            message: "Failed to create syncman directory".to_string(),
-            cause: e,
-        })?;
-        info!("Created (or checked) syncman dir: {:?}", self.syncman_dir);
-        Ok(())
-    }
-
-    fn syncman_path(&self) -> PathBuf {
-        self.syncman_dir.join("syncman.dat")
     }
 }
 
@@ -226,10 +247,18 @@ pub enum Error {
     IO { message: String, cause: io::Error },
     #[error("Document error: {0}")]
     Document(#[from] doc::Error),
+    #[error("Document not found: {doc_space:?}, {doc_id:?}")]
+    DocumentNotFound { doc_space: DocSpace, doc_id: DocId },
 }
 
 fn save_syncman(syncman: &mut AutomergeSyncman, path: &PathBuf) -> Result<(), Error> {
     let data = syncman.save();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| Error::IO {
+            message: format!("Failed to create directory for syncman file. parent: {parent:?}"),
+            cause: e,
+        })?;
+    }
     std::fs::write(path, data).map_err(|e| Error::IO {
         message: format!("Failed to write syncman file at {path:?}"),
         cause: e,
@@ -248,11 +277,7 @@ fn load_syncman(path: &PathBuf) -> Result<AutomergeSyncman, Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        env::temp_dir,
-        thread::sleep,
-        time::{Duration, SystemTime},
-    };
+    use std::env::temp_dir;
 
     use actman::{Actor as _, Control, State};
     use tokio::sync::mpsc;
@@ -266,28 +291,18 @@ mod tests {
 
     #[test]
     fn test_new() {
-        let mut config = Config {
+        let config = Config {
             syncman_dir: temp_dir().join("atman_test_syncman"),
-            overwrite: false,
         };
         let _actor = Actor::new(config.clone()).unwrap();
-        // Check if the syncman has been saved.
-        assert!(config.syncman_path().exists());
-        let file_time = mtime(&config.syncman_path());
-
-        // Recreate Atman with overwrite and check if the syncman file is updated.
-        config.overwrite = true;
-        sleep(Duration::from_millis(1)); // Ensure the mtime will be different.
-        let _actor = Actor::new(config.clone()).unwrap();
-        assert!(config.syncman_path().exists());
-        assert_ne!(mtime(&config.syncman_path()), file_time);
+        // Check if the syncman dir has been created.
+        assert!(config.syncman_dir.exists());
     }
 
     #[test_log::test(tokio::test)]
     async fn update() {
         let actor = Actor::new(Config {
             syncman_dir: temp_dir().join("atman_test_syncman"),
-            overwrite: false,
         })
         .unwrap();
         let (state, message_sender, _control_sender) = actman_state::<Actor>();
@@ -334,6 +349,7 @@ mod tests {
 
         let (msg, reply_receiver) = ListInsertMessage {
             doc_space: aviation::DOC_SPACE.into(),
+            collection_doc_id: aviation::flights::DOC_ID.into(),
             doc_id: aviation::flight::DOC_ID.into(),
             property: "flights".into(),
             index: 1,
@@ -352,10 +368,6 @@ mod tests {
         message_sender.send(cmd).await.unwrap();
         let doc = reply_receiver.await.unwrap().unwrap();
         assert_eq!(doc, Document::Flights(flights));
-    }
-
-    fn mtime(path: &PathBuf) -> SystemTime {
-        std::fs::metadata(path).unwrap().modified().unwrap()
     }
 
     fn actman_state<A: actman::Actor + ?Sized>()

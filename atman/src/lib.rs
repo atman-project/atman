@@ -8,10 +8,13 @@ use tracing::{debug, error, info};
 use crate::actors::rest;
 #[cfg(feature = "rest")]
 pub use crate::actors::rest::Config as RestConfig;
-use crate::actors::{network, sync};
 pub use crate::actors::{
     network::Config as NetworkConfig,
     sync::{Config as SyncConfig, message as sync_message},
+};
+use crate::{
+    actors::{network, sync},
+    doc::{DocId, DocSpace},
 };
 
 mod actors;
@@ -102,11 +105,15 @@ impl Atman {
                     }
                     Command::ConnectAndSync {
                         node_id,
+                        doc_space,
+                        doc_id,
                         reply_sender,
                     } => {
                         network_handle
                             .send(network::Message::Sync {
                                 node_id,
+                                doc_space,
+                                doc_id,
                                 reply_sender,
                             })
                             .await
@@ -172,6 +179,8 @@ pub enum Command {
     },
     ConnectAndSync {
         node_id: NodeId,
+        doc_space: DocSpace,
+        doc_id: DocId,
         reply_sender: oneshot::Sender<Result<(), network::Error>>,
     },
     Sync(sync::message::Message),
