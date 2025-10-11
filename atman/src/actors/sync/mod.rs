@@ -255,6 +255,7 @@ mod tests {
     };
 
     use actman::{Actor as _, Control, State};
+    use syncman::SyncHandle;
     use tokio::sync::mpsc;
     use uuid::Uuid;
 
@@ -281,6 +282,31 @@ mod tests {
         let _actor = Actor::new(config.clone()).unwrap();
         assert!(config.syncman_path().exists());
         assert_ne!(mtime(&config.syncman_path()), file_time);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn initiate_sync_and_generate_msg() {
+        let actor = Actor::new(Config {
+            syncman_dir: temp_dir().join("atman_test_syncman"),
+            overwrite: false,
+        })
+        .unwrap();
+        let (state, message_sender, _control_sender) = actman_state::<Actor>();
+        tokio::spawn(async move {
+            actor.run(state).await;
+        });
+
+        let (reply_sender, reply_receiver) = oneshot::channel();
+        message_sender
+            .send(Message::InitiateSync { reply_sender })
+            .await
+            .unwrap();
+        let mut handle = reply_receiver.await.unwrap();
+
+        let msg = handle
+            .generate_message()
+            .expect("sync message must be generated even if the document is empty");
+        assert!(!msg.is_empty())
     }
 
     #[test_log::test(tokio::test)]
