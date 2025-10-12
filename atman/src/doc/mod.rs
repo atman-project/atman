@@ -90,6 +90,7 @@ impl DocId {
 pub struct DocumentResolver<S: Syncman> {
     deserializers: HashMap<(DocSpace, DocId), DeserializerFn>,
     hydraters: HashMap<(DocSpace, DocId), HydrateFn<S>>,
+    initial_documents: HashMap<(DocSpace, DocId), Vec<u8>>,
 }
 
 type DeserializerFn = fn(&[u8]) -> Result<Document, Error>;
@@ -100,6 +101,7 @@ impl<S: Syncman> DocumentResolver<S> {
         let mut this = Self {
             deserializers: HashMap::new(),
             hydraters: HashMap::new(),
+            initial_documents: HashMap::new(),
         };
 
         this.register(
@@ -107,24 +109,28 @@ impl<S: Syncman> DocumentResolver<S> {
             aviation::flights::DOC_ID.into(),
             Document::deserialize_flights,
             Document::hydrate_flights,
+            Some(aviation::flights::INITIAL_DOC.to_vec()),
         );
         this.register(
             aviation::DOC_SPACE.into(),
             aviation::flight::DOC_ID.into(),
             Document::deserialize_flight,
             Document::hydrate_flight,
+            None,
         );
         this.register(
             protocol::DOC_SPACE.into(),
             protocol::node::DOC_ID.into(),
             Document::deserialize_node,
             Document::hydrate_node,
+            Some(protocol::nodes::INITIAL_DOC.to_vec()),
         );
         this.register(
             protocol::DOC_SPACE.into(),
             protocol::nodes::DOC_ID.into(),
             Document::deserialize_nodes,
             Document::hydrate_nodes,
+            None,
         );
 
         this
@@ -136,10 +142,14 @@ impl<S: Syncman> DocumentResolver<S> {
         id: DocId,
         deserializer: DeserializerFn,
         hydrater: HydrateFn<S>,
+        initial_doc: Option<Vec<u8>>,
     ) {
         self.deserializers
             .insert((space.clone(), id.clone()), deserializer);
-        self.hydraters.insert((space, id), hydrater);
+        self.hydraters.insert((space.clone(), id.clone()), hydrater);
+        if let Some(initial_doc) = initial_doc {
+            self.initial_documents.insert((space, id), initial_doc);
+        }
     }
 
     fn get_deserializer(&self, space: &DocSpace, id: &DocId) -> Option<DeserializerFn> {
@@ -177,6 +187,12 @@ impl<S: Syncman> DocumentResolver<S> {
             space: space.clone(),
             id: id.clone(),
         })
+    }
+
+    pub fn initial_document(&self, space: &DocSpace, id: &DocId) -> Option<&[u8]> {
+        self.initial_documents
+            .get(&(space.clone(), id.clone()))
+            .map(|doc| doc.as_slice())
     }
 }
 
@@ -275,7 +291,7 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use syncman::SyncHandle;
+    use syncman::{SyncHandle, automerge::AutomergeSyncman};
 
     use super::*;
 
@@ -353,6 +369,24 @@ mod tests {
             ),
             Err(Error::UnsupportedDoc { .. })
         ));
+    }
+
+    #[test]
+    fn initial_documents() {
+        let flights = aviation::flights::Flights::default();
+        let nodes = protocol::nodes::Nodes::default();
+
+        let mut syncman = AutomergeSyncman::default();
+        syncman.update(&flights);
+        let snapshot0 = syncman.save();
+        println!("len={}", snapshot0.len());
+        println!("{snapshot0:?}");
+
+        let mut syncman = AutomergeSyncman::default();
+        syncman.update(&nodes);
+        let snapshot0 = syncman.save();
+        println!("len={}", snapshot0.len());
+        println!("{snapshot0:?}");
     }
 
     struct MockSyncman;

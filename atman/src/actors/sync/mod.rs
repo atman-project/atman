@@ -107,10 +107,11 @@ impl Actor {
         }: UpdateMessage,
     ) -> Result<(), Error> {
         let doc = self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
+        self.prepare_initial_syncman(&doc_space, &doc_id);
         let syncman = self
             .syncmans
-            .entry((doc_space.clone(), doc_id.clone()))
-            .or_default();
+            .get_mut(&(doc_space.clone(), doc_id.clone()))
+            .expect("syncman must exist");
         syncman.update(&doc);
         info!("Document updated in syncman");
         save_syncman(syncman, &self.config.syncman_path(&doc_space, &doc_id))
@@ -201,10 +202,11 @@ impl Actor {
         &mut self,
         InitiateSyncMessage { doc_space, doc_id }: InitiateSyncMessage,
     ) -> Result<SyncHandle, Error> {
+        self.prepare_initial_syncman(&doc_space, &doc_id);
         let syncman = self
             .syncmans
-            .entry((doc_space.clone(), doc_id.clone()))
-            .or_default();
+            .get_mut(&(doc_space.clone(), doc_id.clone()))
+            .expect("syncman must exist");
         Ok(SyncHandle::new(syncman.initiate_sync(), doc_space, doc_id))
     }
 
@@ -238,6 +240,25 @@ impl Actor {
         syncman.apply_sync(handle.syncman_handle_mut(), &data);
         save_syncman(syncman, &self.config.syncman_path(&doc_space, &doc_id))?;
         Ok(handle)
+    }
+
+    fn initial_syncman(&self, doc_space: &DocSpace, doc_id: &DocId) -> AutomergeSyncman {
+        match self.doc_resolver.initial_document(doc_space, doc_id) {
+            Some(initial_document) => AutomergeSyncman::load(initial_document),
+            None => AutomergeSyncman::default(),
+        }
+    }
+
+    fn prepare_initial_syncman(&mut self, doc_space: &DocSpace, doc_id: &DocId) {
+        if !self
+            .syncmans
+            .contains_key(&(doc_space.clone(), doc_id.clone()))
+        {
+            self.syncmans.insert(
+                (doc_space.clone(), doc_id.clone()),
+                self.initial_syncman(doc_space, doc_id),
+            );
+        }
     }
 }
 
