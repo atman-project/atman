@@ -14,12 +14,14 @@ pub use crate::actors::{
 };
 use crate::{
     actors::{network, sync},
+    discovery::{get_local_node_id, save_local_node_id},
     doc::{DocId, DocSpace},
 };
 
 mod actors;
 pub mod binding;
 pub mod config;
+mod discovery;
 pub use config::Config;
 pub mod doc;
 
@@ -84,6 +86,15 @@ impl Atman {
             },
         );
 
+        let local_node_id = get_local_node_id(&network_handle).await;
+        if let Err(e) = save_local_node_id(local_node_id, &sync_handle).await {
+            error!("Failed to save local node id: {e:?}");
+            ready_sender
+                .send(Err(e))
+                .expect("Failed to send ready signal");
+            return;
+        }
+
         ready_sender
             .send(Ok(()))
             .expect("Failed to send ready signal");
@@ -109,14 +120,14 @@ impl Atman {
                         doc_id,
                         reply_sender,
                     } => {
-                        network_handle
-                            .send(network::Message::Sync {
-                                node_id,
-                                doc_space,
-                                doc_id,
-                                reply_sender,
-                            })
-                            .await
+                        handle_connect_and_sync_command(
+                            node_id,
+                            doc_space,
+                            doc_id,
+                            reply_sender,
+                            &network_handle,
+                        )
+                        .await
                     }
                     Command::Sync(msg) => sync_handle.send(msg).await,
                     Command::Status { reply_sender } => {
@@ -130,6 +141,36 @@ impl Atman {
             }
         }
     }
+}
+
+async fn handle_connect_and_sync_command(
+    node_id: NodeId,
+    doc_space: DocSpace,
+    doc_id: DocId,
+    reply_sender: oneshot::Sender<Result<(), network::Error>>,
+    network_handle: &Handle<network::Actor>,
+) {
+    let (nodes_sync_reply_sender, nodes_sync_reply_receiver) = oneshot::channel();
+    network_handle
+        .send(network::Message::Sync {
+            node_id,
+            doc_space: doc::protocol::DOC_SPACE.into(),
+            doc_id: doc::protocol::nodes::DOC_ID.into(),
+            reply_sender: nodes_sync_reply_sender,
+        })
+        .await;
+    if let Err(e) = nodes_sync_reply_receiver.await {
+        error!("failed to receive nodes sync reply. proceeding to handle sync command: {e:?}");
+    }
+
+    network_handle
+        .send(network::Message::Sync {
+            node_id,
+            doc_space,
+            doc_id,
+            reply_sender,
+        })
+        .await;
 }
 
 async fn handle_status_command(
@@ -163,8 +204,12 @@ pub enum Error {
     #[cfg(feature = "rest")]
     #[error("Sync error: {0}")]
     Http(#[from] rest::Error),
+    #[error("Document error: {0}")]
+    Doc(#[from] doc::Error),
     #[error("Invalid config: {0}")]
     InvalidConfig(String),
+    #[error("Unexpected document type")]
+    UnexpectedDocumentType,
 }
 
 #[expect(

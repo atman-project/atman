@@ -5,7 +5,7 @@ use crate::doc::protocol::node::Node;
 
 pub const DOC_ID: &str = "nodes";
 
-#[derive(Debug, Clone, Serialize, Deserialize, Reconcile, Hydrate, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reconcile, Hydrate, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Nodes {
     pub nodes: Vec<Node>,

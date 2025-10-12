@@ -92,7 +92,7 @@ pub struct DocumentResolver<S: Syncman> {
     hydraters: HashMap<(DocSpace, DocId), HydrateFn<S>>,
 }
 
-type DeserializerFn = fn(&[u8]) -> Result<Document, serde_json::Error>;
+type DeserializerFn = fn(&[u8]) -> Result<Document, Error>;
 type HydrateFn<S> = fn(&S) -> Result<Document, Error>;
 
 impl<S: Syncman> DocumentResolver<S> {
@@ -159,7 +159,7 @@ impl<S: Syncman> DocumentResolver<S> {
         data: &[u8],
     ) -> Result<Document, Error> {
         if let Some(deserializer) = self.get_deserializer(space, id) {
-            return Ok(deserializer(data)?);
+            return deserializer(data);
         }
 
         Err(Error::UnsupportedDoc {
@@ -208,25 +208,25 @@ impl Reconcile for Document {
 }
 
 impl Document {
-    pub fn serialize(&self) -> Result<Vec<u8>, serde_json::Error> {
+    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
         match self {
-            Self::Flights(flights) => serde_json::to_vec(flights),
-            Self::Flight(flight) => serde_json::to_vec(flight),
-            Self::Nodes(nodes) => serde_json::to_vec(nodes),
-            Self::Node(node) => serde_json::to_vec(node),
+            Self::Flights(flights) => Ok(serde_json::to_vec(flights)?),
+            Self::Flight(flight) => Ok(serde_json::to_vec(flight)?),
+            Self::Nodes(nodes) => Ok(serde_json::to_vec(nodes)?),
+            Self::Node(node) => Ok(serde_json::to_vec(node)?),
         }
     }
 
-    pub fn serialize_pretty(&self) -> Result<String, serde_json::Error> {
+    pub fn serialize_pretty(&self) -> Result<String, Error> {
         match self {
-            Self::Flights(flights) => serde_json::to_string_pretty(flights),
-            Self::Flight(flight) => serde_json::to_string_pretty(flight),
-            Self::Nodes(nodes) => serde_json::to_string_pretty(nodes),
-            Self::Node(node) => serde_json::to_string_pretty(node),
+            Self::Flights(flights) => Ok(serde_json::to_string_pretty(flights)?),
+            Self::Flight(flight) => Ok(serde_json::to_string_pretty(flight)?),
+            Self::Nodes(nodes) => Ok(serde_json::to_string_pretty(nodes)?),
+            Self::Node(node) => Ok(serde_json::to_string_pretty(node)?),
         }
     }
 
-    fn deserialize_flights(data: &[u8]) -> Result<Self, serde_json::Error> {
+    fn deserialize_flights(data: &[u8]) -> Result<Self, Error> {
         let flights: aviation::flights::Flights = serde_json::from_slice(data)?;
         Ok(Self::Flights(flights))
     }
@@ -237,7 +237,7 @@ impl Document {
         ))
     }
 
-    fn deserialize_flight(data: &[u8]) -> Result<Self, serde_json::Error> {
+    fn deserialize_flight(data: &[u8]) -> Result<Self, Error> {
         let flight: aviation::flight::Flight = serde_json::from_slice(data)?;
         Ok(Self::Flight(flight))
     }
@@ -246,7 +246,7 @@ impl Document {
         Ok(Document::Flight(syncman.get::<aviation::flight::Flight>()))
     }
 
-    fn deserialize_nodes(data: &[u8]) -> Result<Self, serde_json::Error> {
+    fn deserialize_nodes(data: &[u8]) -> Result<Self, Error> {
         let nodes: protocol::nodes::Nodes = serde_json::from_slice(data)?;
         Ok(Self::Nodes(nodes))
     }
@@ -255,7 +255,7 @@ impl Document {
         Ok(Document::Nodes(syncman.get::<protocol::nodes::Nodes>()))
     }
 
-    fn deserialize_node(data: &[u8]) -> Result<Self, serde_json::Error> {
+    fn deserialize_node(data: &[u8]) -> Result<Self, Error> {
         let node: protocol::node::Node = serde_json::from_slice(data)?;
         Ok(Self::Node(node))
     }
