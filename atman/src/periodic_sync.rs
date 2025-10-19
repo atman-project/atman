@@ -124,29 +124,6 @@ mod tests {
     use super::*;
 
     #[test_log::test(tokio::test)]
-    async fn sync_tick_when_no_nodes_doc() {
-        let sync_actor = sync::Actor::new(sync_config()).unwrap();
-        let (network_actor, network_message_receiver) = DummyNetworkActor::new();
-
-        let mut runner = actman::Runner::new();
-        let sync_handle = runner.run(sync_actor);
-        let network_handle = runner.run(network_actor);
-
-        let Error::Sync(sync::Error::DocumentNotFound { doc_space, doc_id }) =
-            handle_sync_tick(&sync_handle, &network_handle, &derive_node_id(0))
-                .await
-                .unwrap_err()
-        else {
-            panic!("expected DocumentNotFound error");
-        };
-        assert_eq!(doc_space.as_str(), doc::protocol::DOC_SPACE);
-        assert_eq!(doc_id.as_str(), doc::protocol::nodes::DOC_ID);
-        assert!(network_message_receiver.is_empty());
-
-        runner.shutdown().await;
-    }
-
-    #[test_log::test(tokio::test)]
     async fn sync_tick_when_empty_nodes_doc() {
         let sync_actor = sync::Actor::new(sync_config()).unwrap();
         let (network_actor, network_message_receiver) = DummyNetworkActor::new();

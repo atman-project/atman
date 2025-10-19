@@ -1,5 +1,5 @@
 use std::{
-    ffi::{CStr, c_char, c_ushort},
+    ffi::{CStr, CString, c_char, c_ushort},
     path::PathBuf,
     str::FromStr,
     time::Duration,
@@ -283,20 +283,22 @@ pub struct SyncListInsertCommand {
 
 /// Send a [`SyncGetCommand`] to Atman.
 ///
+/// Returns a JSON represented document if successful. Otherwise, return NULL.
+///
 /// # Safety
 /// All fields in [`SyncGetCommand`] must be valid pointers to byte arrays of
 /// the corresponding length.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn send_atman_sync_get_command(cmd: SyncGetCommand) {
+pub unsafe extern "C" fn send_atman_sync_get_command(cmd: SyncGetCommand) -> *mut c_char {
     let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
     let Ok(doc_space) = doc_space.try_into() else {
         error!("Invalid doc_space");
-        return;
+        return std::ptr::null_mut();
     };
     let doc_id = unsafe { std::slice::from_raw_parts(cmd.doc_id, cmd.doc_id_len) };
     let Ok(doc_id) = doc_id.try_into() else {
         error!("Invalid doc_id");
-        return;
+        return std::ptr::null_mut();
     };
 
     let (msg, reply_receiver) =
@@ -304,9 +306,28 @@ pub unsafe extern "C" fn send_atman_sync_get_command(cmd: SyncGetCommand) {
     send_command(Command::Sync(msg));
 
     match reply_receiver.blocking_recv() {
-        Ok(Ok(document)) => info!("Sync get succeeded: {document:?}"),
-        Ok(Err(e)) => error!("Sync get failed: {e:?}"),
-        Err(e) => error!("Failed to receive reply: {e:?}"),
+        Ok(Ok(document)) => {
+            info!("Sync get succeeded: {document:?}");
+            match document.serialize() {
+                Ok(json) => {
+                    let cstring =
+                        CString::new(json).expect("JSON string must be converted to CString");
+                    cstring.into_raw()
+                }
+                Err(e) => {
+                    error!("JSON serialization error: {e}");
+                    std::ptr::null_mut()
+                }
+            }
+        }
+        Ok(Err(e)) => {
+            error!("Sync get failed: {e:?}");
+            std::ptr::null_mut()
+        }
+        Err(e) => {
+            error!("Failed to receive reply: {e:?}");
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -316,4 +337,12 @@ pub struct SyncGetCommand {
     pub doc_space_len: usize,
     pub doc_id: *const u8,
     pub doc_id_len: usize,
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_string(str: *mut c_char) {
+    if !str.is_null() {
+        let _cstring = unsafe { CString::from_raw(str) };
+        // _cstring is dropped here.
+    }
 }

@@ -13,7 +13,7 @@ pub use config::Config;
 pub use handle::SyncHandle;
 use syncman::{Syncman, automerge::AutomergeSyncman};
 use tokio::sync::oneshot;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     doc::{self, DocId, DocSpace, Document, DocumentResolver},
@@ -112,7 +112,7 @@ impl Actor {
         }: UpdateMessage,
     ) -> Result<(), Error> {
         let doc = self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
-        self.prepare_initial_syncman(&doc_space, &doc_id)?;
+        self.initialize_syncman_if_not_exist(&doc_space, &doc_id)?;
         let syncman = self
             .syncmans
             .get_mut(&(doc_space.clone(), doc_id.clone()))
@@ -180,7 +180,9 @@ impl Actor {
         &mut self,
         GetMessage { doc_space, doc_id }: GetMessage,
     ) -> Result<Document, Error> {
-        let _ = self.prepare_initial_syncman(&doc_space, &doc_id);
+        if let Err(e) = self.initialize_syncman_if_not_exist(&doc_space, &doc_id) {
+            error!("Failed to initialize syncman for {doc_space:?}/{doc_id:?}: {e:?}")
+        }
         let syncman = self
             .syncmans
             .get(&(doc_space.clone(), doc_id.clone()))
@@ -215,7 +217,7 @@ impl Actor {
         &mut self,
         InitiateSyncMessage { doc_space, doc_id }: InitiateSyncMessage,
     ) -> Result<SyncHandle, Error> {
-        self.prepare_initial_syncman(&doc_space, &doc_id)?;
+        self.initialize_syncman_if_not_exist(&doc_space, &doc_id)?;
         let syncman = self
             .syncmans
             .get_mut(&(doc_space.clone(), doc_id.clone()))
@@ -255,7 +257,7 @@ impl Actor {
         Ok(handle)
     }
 
-    fn prepare_initial_syncman(
+    fn initialize_syncman_if_not_exist(
         &mut self,
         doc_space: &DocSpace,
         doc_id: &DocId,
@@ -264,13 +266,16 @@ impl Actor {
             .syncmans
             .contains_key(&(doc_space.clone(), doc_id.clone()))
         {
+            debug!("Syncman already exists for {doc_space:?}/{doc_id:?}");
             return Ok(());
         }
 
+        info!("Initializing syncman for {doc_space:?}/{doc_id:?}");
         match self.initial_syncman(doc_space, doc_id) {
             Some(syncman) => {
                 self.syncmans
                     .insert((doc_space.clone(), doc_id.clone()), syncman);
+                info!("Syncman initialized for {doc_space:?}/{doc_id:?}");
                 Ok(())
             }
             None => Err(Error::InitialDocumentNotRegistered {
