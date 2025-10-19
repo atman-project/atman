@@ -339,6 +339,10 @@ pub struct SyncGetCommand {
     pub doc_id_len: usize,
 }
 
+/// Free a C string allocated by Rust if it is not null.
+///
+/// # Safety
+/// `str` must be a valid pointer returned by Rust.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_string(str: *mut c_char) {
     if !str.is_null() {
