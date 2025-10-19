@@ -15,12 +15,16 @@ use crate::{
 pub async fn handle_sync_tick<SyncActor, NetworkActor>(
     sync_handle: &Handle<SyncActor>,
     network_handle: &Handle<NetworkActor>,
-) -> Result<(), Error>
+    local_node_id: &NodeId,
+) -> Result<usize, Error>
 where
     SyncActor: actman::Actor<Message = sync::message::Message>,
     NetworkActor: actman::Actor<Message = network::Message>,
 {
-    let nodes = load_nodes(sync_handle).await?;
+    let nodes = load_remote_nodes(sync_handle, local_node_id).await?;
+    if nodes.is_empty() {
+        return Ok(0);
+    }
 
     let (reply_sender, reply_receiver) = oneshot::channel();
     sync_handle
@@ -28,11 +32,13 @@ where
         .await;
     let docs = reply_receiver.await.expect("sync actor must exist");
 
+    let mut successful_syncs = 0;
     for (doc_space, doc_id) in docs {
         for node in &nodes {
             match request_sync(node.id, doc_space.clone(), doc_id.clone(), network_handle).await {
                 Ok(()) => {
                     info!("Periodic sync successful for {doc_space:?}/{doc_id:?} with {node:?}");
+                    successful_syncs += 1;
                 }
                 Err(e) => {
                     error!(
@@ -42,10 +48,13 @@ where
             }
         }
     }
-    Ok(())
+    Ok(successful_syncs)
 }
 
-async fn load_nodes<SyncActor>(sync_handle: &Handle<SyncActor>) -> Result<HashSet<Node>, Error>
+async fn load_remote_nodes<SyncActor>(
+    sync_handle: &Handle<SyncActor>,
+    local_node_id: &NodeId,
+) -> Result<HashSet<Node>, Error>
 where
     SyncActor: actman::Actor<Message = sync::message::Message>,
 {
@@ -70,7 +79,13 @@ where
     Ok(nodes
         .nodes()
         .filter_map(|node| match Node::try_from(node) {
-            Ok(node) => Some(node),
+            Ok(node) => {
+                if node.id != *local_node_id {
+                    Some(node)
+                } else {
+                    None
+                }
+            }
             Err(e) => {
                 error!("failed to parse node id {}. skipping this...: {e}", node.id);
                 None
@@ -118,7 +133,7 @@ mod tests {
         let network_handle = runner.run(network_actor);
 
         let Error::Sync(sync::Error::DocumentNotFound { doc_space, doc_id }) =
-            handle_sync_tick(&sync_handle, &network_handle)
+            handle_sync_tick(&sync_handle, &network_handle, &derive_node_id(0))
                 .await
                 .unwrap_err()
         else {
@@ -142,9 +157,10 @@ mod tests {
 
         prepare_nodes_doc(&sync_handle, &[]).await;
 
-        handle_sync_tick(&sync_handle, &network_handle)
+        let successful_syncs = handle_sync_tick(&sync_handle, &network_handle, &derive_node_id(0))
             .await
             .unwrap();
+        assert_eq!(successful_syncs, 0);
         assert!(network_message_receiver.is_empty());
 
         runner.shutdown().await;
@@ -160,31 +176,34 @@ mod tests {
         let network_handle = runner.run(network_actor);
 
         // Prepare a nodes doc
-        let mut node_ids = HashSet::from([derive_node_id(0), derive_node_id(1)]);
+        let local_node_id = derive_node_id(0);
+        let mut remote_node_ids = HashSet::from([derive_node_id(1), derive_node_id(2)]);
         prepare_nodes_doc(
             &sync_handle,
-            &node_ids
+            &remote_node_ids
                 .iter()
                 .copied()
+                .chain(std::iter::once(local_node_id))
                 .map(|id| Node { id })
                 .collect::<Vec<_>>(),
         )
         .await;
 
         // Trigger handling a sync tick
-        handle_sync_tick(&sync_handle, &network_handle)
+        let successful_syncs = handle_sync_tick(&sync_handle, &network_handle, &local_node_id)
             .await
             .unwrap();
+        assert_eq!(successful_syncs, 2);
 
         // Verify that sync requests were sent to one of the nodes
         let (node_id, doc_space, doc_id) = network_message_receiver.recv().await.unwrap();
-        assert!(node_ids.remove(&node_id));
+        assert!(remote_node_ids.remove(&node_id));
         assert_eq!(doc_space.as_str(), doc::protocol::DOC_SPACE);
         assert_eq!(doc_id.as_str(), doc::protocol::nodes::DOC_ID);
 
         // Verify that sync requests were sent to the nodes left.
         let (node_id, doc_space, doc_id) = network_message_receiver.recv().await.unwrap();
-        assert!(node_ids.remove(&node_id));
+        assert!(remote_node_ids.remove(&node_id));
         assert_eq!(doc_space.as_str(), doc::protocol::DOC_SPACE);
         assert_eq!(doc_id.as_str(), doc::protocol::nodes::DOC_ID);
 

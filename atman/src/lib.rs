@@ -13,7 +13,7 @@ use crate::{
     actors::{network, sync},
     command::handle_command,
     discovery::{get_local_node_id, save_local_node_id},
-    sync_timer::handle_sync_tick,
+    periodic_sync::handle_sync_tick,
 };
 
 mod actors;
@@ -23,7 +23,7 @@ pub use command::Command;
 pub mod config;
 mod discovery;
 mod error;
-mod sync_timer;
+mod periodic_sync;
 pub use error::Error;
 mod models;
 pub use config::Config;
@@ -109,8 +109,9 @@ impl Atman {
             tokio::select! {
                 _ = async { sync_timer.as_mut().unwrap().tick().await }, if sync_timer.is_some() => {
                     debug!("Sync timer ticked");
-                    if let Err(e) = handle_sync_tick(&sync_handle, &network_handle).await {
-                        error!("error from periodic sync: {e}");
+                    match handle_sync_tick(&sync_handle, &network_handle, &local_node_id).await {
+                        Ok(successful_syncs) => info!("periodic sync was successful with {successful_syncs} nodes"),
+                        Err(e) => error!("error from periodic sync: {e}"),
                     }
                 },
                 Some(cmd) = self.command_receiver.recv() => {
