@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use autosurgeon::{Reconcile, reconcile::NoKey};
 use serde::{Deserialize, Serialize};
 use syncman::Syncman;
+use tracing::debug;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct DocSpace(String);
@@ -120,16 +121,16 @@ impl<S: Syncman> DocumentResolver<S> {
         );
         this.register(
             protocol::DOC_SPACE.into(),
-            protocol::node::DOC_ID.into(),
-            Document::deserialize_node,
-            Document::hydrate_node,
+            protocol::nodes::DOC_ID.into(),
+            Document::deserialize_nodes,
+            Document::hydrate_nodes,
             Some(protocol::nodes::INITIAL_DOC.to_vec()),
         );
         this.register(
             protocol::DOC_SPACE.into(),
-            protocol::nodes::DOC_ID.into(),
-            Document::deserialize_nodes,
-            Document::hydrate_nodes,
+            protocol::node::DOC_ID.into(),
+            Document::deserialize_node,
+            Document::hydrate_node,
             None,
         );
 
@@ -148,6 +149,7 @@ impl<S: Syncman> DocumentResolver<S> {
             .insert((space.clone(), id.clone()), deserializer);
         self.hydraters.insert((space.clone(), id.clone()), hydrater);
         if let Some(initial_doc) = initial_doc {
+            debug!("Registering initial document for {space:?}/{id:?}");
             self.initial_documents.insert((space, id), initial_doc);
         }
     }

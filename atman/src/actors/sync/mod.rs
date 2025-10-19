@@ -13,7 +13,7 @@ pub use config::Config;
 pub use handle::SyncHandle;
 use syncman::{Syncman, automerge::AutomergeSyncman};
 use tokio::sync::oneshot;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     doc::{self, DocId, DocSpace, Document, DocumentResolver},
@@ -112,7 +112,7 @@ impl Actor {
         }: UpdateMessage,
     ) -> Result<(), Error> {
         let doc = self.doc_resolver.deserialize(&doc_space, &doc_id, &data)?;
-        self.prepare_initial_syncman(&doc_space, &doc_id);
+        self.initialize_syncman_if_not_exist(&doc_space, &doc_id)?;
         let syncman = self
             .syncmans
             .get_mut(&(doc_space.clone(), doc_id.clone()))
@@ -164,7 +164,7 @@ impl Actor {
     }
 
     fn handle_get_message(
-        &self,
+        &mut self,
         msg: GetMessage,
         reply_sender: oneshot::Sender<Result<Document, Error>>,
     ) {
@@ -177,9 +177,12 @@ impl Actor {
     }
 
     fn handle_get_message_inner(
-        &self,
+        &mut self,
         GetMessage { doc_space, doc_id }: GetMessage,
     ) -> Result<Document, Error> {
+        if let Err(e) = self.initialize_syncman_if_not_exist(&doc_space, &doc_id) {
+            error!("Failed to initialize syncman for {doc_space:?}/{doc_id:?}: {e:?}")
+        }
         let syncman = self
             .syncmans
             .get(&(doc_space.clone(), doc_id.clone()))
@@ -214,7 +217,7 @@ impl Actor {
         &mut self,
         InitiateSyncMessage { doc_space, doc_id }: InitiateSyncMessage,
     ) -> Result<SyncHandle, Error> {
-        self.prepare_initial_syncman(&doc_space, &doc_id);
+        self.initialize_syncman_if_not_exist(&doc_space, &doc_id)?;
         let syncman = self
             .syncmans
             .get_mut(&(doc_space.clone(), doc_id.clone()))
@@ -254,23 +257,38 @@ impl Actor {
         Ok(handle)
     }
 
-    fn initial_syncman(&self, doc_space: &DocSpace, doc_id: &DocId) -> AutomergeSyncman {
-        match self.doc_resolver.initial_document(doc_space, doc_id) {
-            Some(initial_document) => AutomergeSyncman::load(initial_document),
-            None => AutomergeSyncman::default(),
-        }
-    }
-
-    fn prepare_initial_syncman(&mut self, doc_space: &DocSpace, doc_id: &DocId) {
-        if !self
+    fn initialize_syncman_if_not_exist(
+        &mut self,
+        doc_space: &DocSpace,
+        doc_id: &DocId,
+    ) -> Result<(), Error> {
+        if self
             .syncmans
             .contains_key(&(doc_space.clone(), doc_id.clone()))
         {
-            self.syncmans.insert(
-                (doc_space.clone(), doc_id.clone()),
-                self.initial_syncman(doc_space, doc_id),
-            );
+            debug!("Syncman already exists for {doc_space:?}/{doc_id:?}");
+            return Ok(());
         }
+
+        info!("Initializing syncman for {doc_space:?}/{doc_id:?}");
+        match self.initial_syncman(doc_space, doc_id) {
+            Some(syncman) => {
+                self.syncmans
+                    .insert((doc_space.clone(), doc_id.clone()), syncman);
+                info!("Syncman initialized for {doc_space:?}/{doc_id:?}");
+                Ok(())
+            }
+            None => Err(Error::InitialDocumentNotRegistered {
+                doc_space: doc_space.clone(),
+                doc_id: doc_id.clone(),
+            }),
+        }
+    }
+
+    fn initial_syncman(&self, doc_space: &DocSpace, doc_id: &DocId) -> Option<AutomergeSyncman> {
+        self.doc_resolver
+            .initial_document(doc_space, doc_id)
+            .map(AutomergeSyncman::load)
     }
 }
 
@@ -282,6 +300,8 @@ pub enum Error {
     Document(#[from] doc::Error),
     #[error("Document not found: {doc_space:?}, {doc_id:?}")]
     DocumentNotFound { doc_space: DocSpace, doc_id: DocId },
+    #[error("Initial document not registered: {doc_space:?}, {doc_id:?}")]
+    InitialDocumentNotRegistered { doc_space: DocSpace, doc_id: DocId },
 }
 
 fn save_syncman(syncman: &mut AutomergeSyncman, path: &PathBuf) -> Result<(), Error> {
@@ -310,10 +330,9 @@ fn load_syncman(path: &PathBuf) -> Result<AutomergeSyncman, Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::env::temp_dir;
-
     use actman::{Actor as _, Control, State};
     use syncman::SyncHandle;
+    use tempfile::TempDir;
     use tokio::sync::mpsc;
     use uuid::Uuid;
 
@@ -325,9 +344,7 @@ mod tests {
 
     #[test]
     fn test_new() {
-        let config = Config {
-            syncman_dir: temp_dir().join("atman_test_syncman"),
-        };
+        let config = sync_config();
         let _actor = Actor::new(config.clone()).unwrap();
         // Check if the syncman dir has been created.
         assert!(config.syncman_dir.exists());
@@ -335,10 +352,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn initiate_sync_and_generate_msg() {
-        let actor = Actor::new(Config {
-            syncman_dir: temp_dir().join("atman_test_syncman"),
-        })
-        .unwrap();
+        let actor = Actor::new(sync_config()).unwrap();
         let (state, message_sender, _control_sender) = actman_state::<Actor>();
         tokio::spawn(async move {
             actor.run(state).await;
@@ -361,10 +375,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn update() {
-        let actor = Actor::new(Config {
-            syncman_dir: temp_dir().join("atman_test_syncman"),
-        })
-        .unwrap();
+        let actor = Actor::new(sync_config()).unwrap();
         let (state, message_sender, _control_sender) = actman_state::<Actor>();
         tokio::spawn(async move {
             actor.run(state).await;
@@ -430,6 +441,74 @@ mod tests {
         assert_eq!(doc, Document::Flights(flights));
     }
 
+    #[test_log::test(tokio::test)]
+    async fn initialize_and_get() {
+        let actor = Actor::new(sync_config()).unwrap();
+        let (state, message_sender, _control_sender) = actman_state::<Actor>();
+        tokio::spawn(async move {
+            actor.run(state).await;
+        });
+
+        // Expect that Flights doc is initialized and returned.
+        let (msg, reply_receiver) = GetMessage {
+            doc_space: aviation::DOC_SPACE.into(),
+            doc_id: aviation::flights::DOC_ID.into(),
+        }
+        .into();
+        message_sender.send(msg).await.unwrap();
+        let doc = reply_receiver.await.unwrap().unwrap();
+        assert_eq!(doc, Document::Flights(Flights { flights: vec![] }));
+
+        // Add a flight to the Flights doc.
+        let flight = Flight {
+            id: Uuid::new_v4(),
+            departure_airport: "ICN".into(),
+            arrival_airport: "SEA".into(),
+            departure_local_time: "2025-08-03T05:45:10Z".into(),
+            arrival_local_time: "2025-08-03T05:45:10Z".into(),
+            airline: "Korean Air".into(),
+            aircraft: "A350-900".into(),
+            flight_number: "KE1234".into(),
+            booking_reference: "ABCDEF".into(),
+        };
+        let (msg, reply_receiver) = ListInsertMessage {
+            doc_space: aviation::DOC_SPACE.into(),
+            collection_doc_id: aviation::flights::DOC_ID.into(),
+            doc_id: aviation::flight::DOC_ID.into(),
+            property: "flights".into(),
+            index: 0,
+            data: Document::Flight(flight.clone()).serialize().unwrap(),
+        }
+        .into();
+        message_sender.send(msg).await.unwrap();
+        reply_receiver.await.unwrap().unwrap();
+
+        // Expect that the updated doc is returned.
+        let (msg, reply_receiver) = GetMessage {
+            doc_space: aviation::DOC_SPACE.into(),
+            doc_id: aviation::flights::DOC_ID.into(),
+        }
+        .into();
+        message_sender.send(msg).await.unwrap();
+        let doc = reply_receiver.await.unwrap().unwrap();
+        assert_eq!(
+            doc,
+            Document::Flights(Flights {
+                flights: vec![flight]
+            })
+        );
+
+        // Error::DocumentNotFound is returned for Flight doc.
+        let (msg, reply_receiver) = GetMessage {
+            doc_space: aviation::DOC_SPACE.into(),
+            doc_id: aviation::flight::DOC_ID.into(),
+        }
+        .into();
+        message_sender.send(msg).await.unwrap();
+        let doc = reply_receiver.await.unwrap().unwrap_err();
+        assert!(matches!(doc, Error::DocumentNotFound { .. }));
+    }
+
     fn actman_state<A: actman::Actor + ?Sized>()
     -> (State<A>, mpsc::Sender<A::Message>, mpsc::Sender<Control>) {
         let (message_sender, message_receiver) = mpsc::channel(10);
@@ -442,5 +521,11 @@ mod tests {
             message_sender,
             control_sender,
         )
+    }
+
+    fn sync_config() -> Config {
+        Config {
+            syncman_dir: TempDir::new().unwrap().path().to_owned(),
+        }
     }
 }

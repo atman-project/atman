@@ -1,5 +1,5 @@
 use std::{
-    ffi::{CStr, c_char, c_ushort},
+    ffi::{CStr, CString, c_char, c_ushort},
     path::PathBuf,
     str::FromStr,
     time::Duration,
@@ -279,4 +279,74 @@ pub struct SyncListInsertCommand {
     pub data: *const u8,
     pub data_len: usize,
     pub index: usize,
+}
+
+/// Send a [`SyncGetCommand`] to Atman.
+///
+/// Returns a JSON represented document if successful. Otherwise, return NULL.
+///
+/// # Safety
+/// All fields in [`SyncGetCommand`] must be valid pointers to byte arrays of
+/// the corresponding length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn send_atman_sync_get_command(cmd: SyncGetCommand) -> *mut c_char {
+    let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
+    let Ok(doc_space) = doc_space.try_into() else {
+        error!("Invalid doc_space");
+        return std::ptr::null_mut();
+    };
+    let doc_id = unsafe { std::slice::from_raw_parts(cmd.doc_id, cmd.doc_id_len) };
+    let Ok(doc_id) = doc_id.try_into() else {
+        error!("Invalid doc_id");
+        return std::ptr::null_mut();
+    };
+
+    let (msg, reply_receiver) =
+        crate::actors::sync::message::GetMessage { doc_space, doc_id }.into();
+    send_command(Command::Sync(msg));
+
+    match reply_receiver.blocking_recv() {
+        Ok(Ok(document)) => {
+            info!("Sync get succeeded: {document:?}");
+            match document.serialize() {
+                Ok(json) => {
+                    let cstring =
+                        CString::new(json).expect("JSON string must be converted to CString");
+                    cstring.into_raw()
+                }
+                Err(e) => {
+                    error!("JSON serialization error: {e}");
+                    std::ptr::null_mut()
+                }
+            }
+        }
+        Ok(Err(e)) => {
+            error!("Sync get failed: {e:?}");
+            std::ptr::null_mut()
+        }
+        Err(e) => {
+            error!("Failed to receive reply: {e:?}");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[repr(C)]
+pub struct SyncGetCommand {
+    pub doc_space: *const u8,
+    pub doc_space_len: usize,
+    pub doc_id: *const u8,
+    pub doc_id_len: usize,
+}
+
+/// Free a C string allocated by Rust if it is not null.
+///
+/// # Safety
+/// `str` must be a valid pointer returned by Rust.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_string(str: *mut c_char) {
+    if !str.is_null() {
+        let _cstring = unsafe { CString::from_raw(str) };
+        // _cstring is dropped here.
+    }
 }
