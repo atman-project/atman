@@ -1,13 +1,13 @@
 [package]
-authors     = { workspace = true }
+name        = "atman-cli"
+version     = "0.1.0"
 description = "Command-line interface for Atman"
+authors     = { workspace = true }
 edition     = { workspace = true }
 homepage    = { workspace = true }
 license     = { workspace = true }
-name        = "atman-cli"
 readme      = { workspace = true }
 repository  = { workspace = true }
-version     = "0.1.0"
 
 [dependencies]
 atman              = { path = "../atman", features = ["rest"] }
