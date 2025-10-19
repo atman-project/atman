@@ -2,7 +2,12 @@ mod config;
 mod handle;
 pub mod message;
 
-use std::{collections::HashMap, fmt::Debug, io, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    io,
+    path::PathBuf,
+};
 
 pub use config::Config;
 pub use handle::SyncHandle;
@@ -72,8 +77,8 @@ impl Actor {
             Message::ListInsert { msg, reply_sender } => {
                 self.handle_list_insert_message(msg, reply_sender)
             }
-
             Message::Get { msg, reply_sender } => self.handle_get_message(msg, reply_sender),
+            Message::ListDocuments { reply_sender } => self.handle_list_documents(reply_sender),
             Message::InitiateSync { msg, reply_sender } => {
                 self.handle_initiate_sync_message(msg, reply_sender)
             }
@@ -183,6 +188,13 @@ impl Actor {
                 doc_id: doc_id.clone(),
             })?;
         Ok(self.doc_resolver.hydrate(&doc_space, &doc_id, syncman)?)
+    }
+
+    fn handle_list_documents(&self, reply_sender: oneshot::Sender<HashSet<(DocSpace, DocId)>>) {
+        let docs = self.syncmans.keys().cloned().collect();
+        let _ = reply_sender
+            .send(docs)
+            .inspect_err(|_| error!("Failed to send reply"));
     }
 
     fn handle_initiate_sync_message(

@@ -12,6 +12,7 @@ version     = "0.1.0"
 [dependencies]
 atman              = { path = "../atman", features = ["rest"] }
 clap               = { version = "4", features = ["derive"] }
+humantime          = "2"
 iroh               = { workspace = true }
 qrcode             = "0.14"
 serde_json         = { workspace = true }

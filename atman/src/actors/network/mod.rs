@@ -104,11 +104,11 @@ impl Actor {
 
     async fn handle_message(&self, message: Message) {
         match message {
-            Message::Echo {
+            Message::ConnectAndEcho {
                 node_id,
                 reply_sender,
             } => self.handle_echo_message(node_id, reply_sender).await,
-            Message::Sync {
+            Message::ConnectAndSync {
                 node_id,
                 doc_space,
                 doc_id,
@@ -155,11 +155,12 @@ impl Actor {
 }
 
 pub enum Message {
-    Echo {
+    ConnectAndEcho {
         node_id: NodeId,
         reply_sender: oneshot::Sender<Result<(), Error>>,
     },
-    Sync {
+    // TODO: Considering a command for syncing multiple docs at once
+    ConnectAndSync {
         node_id: NodeId,
         doc_space: DocSpace,
         doc_id: DocId,

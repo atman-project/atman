@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 
 use atman::{
     Atman, Error, NetworkConfig, RestConfig, SyncConfig,
@@ -239,6 +239,8 @@ struct Args {
     rest_addr: Option<SocketAddr>,
     #[clap(long)]
     syncman_dir: String,
+    #[clap(long, value_parser = humantime::parse_duration)]
+    sync_interval: Option<Duration>,
     #[clap(subcommand)]
     command: Command,
 }
@@ -262,6 +264,7 @@ impl Args {
             sync: SyncConfig {
                 syncman_dir: PathBuf::from(&self.syncman_dir),
             },
+            sync_interval: self.sync_interval,
             rest: self
                 .rest_addr
                 .map_or(Default::default(), |addr| RestConfig { addr }),

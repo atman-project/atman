@@ -1,6 +1,3 @@
-use ::iroh::NodeId;
-use actman::Handle;
-use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
 
@@ -14,14 +11,21 @@ pub use crate::actors::{
 };
 use crate::{
     actors::{network, sync},
+    command::handle_command,
     discovery::{get_local_node_id, save_local_node_id},
-    doc::{DocId, DocSpace},
+    sync_timer::handle_sync_tick,
 };
 
 mod actors;
 pub mod binding;
+mod command;
+pub use command::Command;
 pub mod config;
 mod discovery;
+mod error;
+mod sync_timer;
+pub use error::Error;
+mod models;
 pub use config::Config;
 pub mod doc;
 
@@ -95,147 +99,25 @@ impl Atman {
             return;
         }
 
+        let mut sync_timer = self.config.sync_interval.map(tokio::time::interval);
+
         ready_sender
             .send(Ok(()))
             .expect("Failed to send ready signal");
 
         loop {
-            if let Some(cmd) = self.command_receiver.recv().await {
-                debug!("Command received: {:?}", cmd);
-                match cmd {
-                    Command::ConnectAndEcho {
-                        node_id,
-                        reply_sender,
-                    } => {
-                        network_handle
-                            .send(network::Message::Echo {
-                                node_id,
-                                reply_sender,
-                            })
-                            .await
+            tokio::select! {
+                _ = async { sync_timer.as_mut().unwrap().tick().await }, if sync_timer.is_some() => {
+                    debug!("Sync timer ticked");
+                    if let Err(e) = handle_sync_tick(&sync_handle, &network_handle).await {
+                        error!("error from periodic sync: {e}");
                     }
-                    Command::ConnectAndSync {
-                        node_id,
-                        doc_space,
-                        doc_id,
-                        reply_sender,
-                    } => {
-                        handle_connect_and_sync_command(
-                            node_id,
-                            doc_space,
-                            doc_id,
-                            reply_sender,
-                            &network_handle,
-                        )
-                        .await
-                    }
-                    Command::Sync(msg) => sync_handle.send(msg).await,
-                    Command::Status { reply_sender } => {
-                        handle_status_command(reply_sender, &network_handle).await;
-                    }
-                    Command::Shutdown => {
-                        runner.shutdown().await;
-                        return;
-                    }
+                },
+                Some(cmd) = self.command_receiver.recv() => {
+                    debug!("Command received: {:?}", cmd);
+                    handle_command(cmd, &network_handle, &sync_handle).await;
                 }
             }
         }
     }
-}
-
-async fn handle_connect_and_sync_command(
-    node_id: NodeId,
-    doc_space: DocSpace,
-    doc_id: DocId,
-    reply_sender: oneshot::Sender<Result<(), network::Error>>,
-    network_handle: &Handle<network::Actor>,
-) {
-    let (nodes_sync_reply_sender, nodes_sync_reply_receiver) = oneshot::channel();
-    network_handle
-        .send(network::Message::Sync {
-            node_id,
-            doc_space: doc::protocol::DOC_SPACE.into(),
-            doc_id: doc::protocol::nodes::DOC_ID.into(),
-            reply_sender: nodes_sync_reply_sender,
-        })
-        .await;
-    if let Err(e) = nodes_sync_reply_receiver.await {
-        error!("failed to receive nodes sync reply. proceeding to handle sync command: {e:?}");
-    }
-
-    network_handle
-        .send(network::Message::Sync {
-            node_id,
-            doc_space,
-            doc_id,
-            reply_sender,
-        })
-        .await;
-}
-
-async fn handle_status_command(
-    reply_sender: oneshot::Sender<Status>,
-    network_handle: &Handle<network::Actor>,
-) {
-    let (network_status_sender, network_status_receiver) = oneshot::channel();
-    network_handle
-        .send(network::Message::Status {
-            reply_sender: network_status_sender,
-        })
-        .await;
-
-    let Ok(node_id) = network_status_receiver.await else {
-        error!("Failed to receive network status");
-        return;
-    };
-
-    let status = Status { node_id };
-    let _ = reply_sender
-        .send(status)
-        .inspect_err(|_| error!("Failed to send status reply"));
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Network error: {0}")]
-    Network(#[from] network::Error),
-    #[error("Sync error: {0}")]
-    Sync(#[from] sync::Error),
-    #[cfg(feature = "rest")]
-    #[error("Sync error: {0}")]
-    Http(#[from] rest::Error),
-    #[error("Document error: {0}")]
-    Doc(#[from] doc::Error),
-    #[error("Invalid config: {0}")]
-    InvalidConfig(String),
-    #[error("Unexpected document type")]
-    UnexpectedDocumentType,
-}
-
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Make AutomergeSyncHandle in sync::Message generic"
-)]
-#[derive(Debug)]
-pub enum Command {
-    ConnectAndEcho {
-        node_id: NodeId,
-        reply_sender: oneshot::Sender<Result<(), network::Error>>,
-    },
-    ConnectAndSync {
-        node_id: NodeId,
-        doc_space: DocSpace,
-        doc_id: DocId,
-        reply_sender: oneshot::Sender<Result<(), network::Error>>,
-    },
-    Sync(sync::message::Message),
-    Status {
-        reply_sender: oneshot::Sender<Status>,
-    },
-    Shutdown,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Status {
-    pub node_id: NodeId,
 }
