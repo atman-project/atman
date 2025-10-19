@@ -9,6 +9,10 @@ license     = { workspace = true }
 readme      = { workspace = true }
 repository  = { workspace = true }
 
+[[bin]]
+name = "atman"
+path = "src/main.rs"
+
 [dependencies]
 atman              = { path = "../atman", features = ["rest"] }
 clap               = { version = "4", features = ["derive"] }
