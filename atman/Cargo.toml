@@ -1,13 +1,13 @@
 [package]
-authors     = { workspace = true }
+name        = "atman"
+version     = "0.1.0"
 description = "Atman is a set of protocols that can be embedded into any desktop and mobile applications."
+authors     = { workspace = true }
 edition     = { workspace = true }
 homepage    = { workspace = true }
 license     = { workspace = true }
-name        = "atman"
 readme      = { workspace = true }
 repository  = { workspace = true }
-version     = "0.1.0"
 
 [lib]
 crate-type = ["lib", "staticlib"]
