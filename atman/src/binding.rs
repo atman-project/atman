@@ -280,3 +280,40 @@ pub struct SyncListInsertCommand {
     pub data_len: usize,
     pub index: usize,
 }
+
+/// Send a [`SyncGetCommand`] to Atman.
+///
+/// # Safety
+/// All fields in [`SyncGetCommand`] must be valid pointers to byte arrays of
+/// the corresponding length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn send_atman_sync_get_command(cmd: SyncGetCommand) {
+    let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
+    let Ok(doc_space) = doc_space.try_into() else {
+        error!("Invalid doc_space");
+        return;
+    };
+    let doc_id = unsafe { std::slice::from_raw_parts(cmd.doc_id, cmd.doc_id_len) };
+    let Ok(doc_id) = doc_id.try_into() else {
+        error!("Invalid doc_id");
+        return;
+    };
+
+    let (msg, reply_receiver) =
+        crate::actors::sync::message::GetMessage { doc_space, doc_id }.into();
+    send_command(Command::Sync(msg));
+
+    match reply_receiver.blocking_recv() {
+        Ok(Ok(document)) => info!("Sync get succeeded: {document:?}"),
+        Ok(Err(e)) => error!("Sync get failed: {e:?}"),
+        Err(e) => error!("Failed to receive reply: {e:?}"),
+    }
+}
+
+#[repr(C)]
+pub struct SyncGetCommand {
+    pub doc_space: *const u8,
+    pub doc_space_len: usize,
+    pub doc_id: *const u8,
+    pub doc_id_len: usize,
+}

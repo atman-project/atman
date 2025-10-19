@@ -118,7 +118,7 @@ where
 #[cfg(test)]
 mod tests {
     use iroh::SecretKey;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
     use tokio::sync::mpsc;
 
     use super::*;
@@ -231,7 +231,7 @@ mod tests {
 
     fn sync_config() -> sync::Config {
         sync::Config {
-            syncman_dir: TempDir::new("sync-timer-test").unwrap().into_path(),
+            syncman_dir: TempDir::new().unwrap().path().to_owned(),
         }
     }
 

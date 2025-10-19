@@ -354,7 +354,7 @@ pub enum Event {
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use super::*;
     use crate::{actors::sync, doc};
@@ -409,7 +409,7 @@ mod tests {
 
     fn sync_config() -> sync::Config {
         sync::Config {
-            syncman_dir: TempDir::new("network-sync-test").unwrap().into_path(),
+            syncman_dir: TempDir::new().unwrap().path().to_owned(),
         }
     }
 }
