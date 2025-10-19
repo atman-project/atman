@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 
 use atman::{
     Atman, Error, NetworkConfig, RestConfig, SyncConfig,
@@ -72,6 +72,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         .inspect_err(|e| {
             error!("Channel send error: {e}");
         })?;
+    info!("Waiting for Atman to terminate...");
     if let Err(e) = atman_task.await {
         error!("Failed to wait until Atman is terminated: {e}");
     }
@@ -101,6 +102,8 @@ async fn daemonize() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
+
+    info!("Termination signal received");
 }
 
 async fn handle_status(command_sender: &mpsc::Sender<atman::Command>) {
@@ -239,6 +242,8 @@ struct Args {
     rest_addr: Option<SocketAddr>,
     #[clap(long)]
     syncman_dir: String,
+    #[clap(long, value_parser = humantime::parse_duration)]
+    sync_interval: Option<Duration>,
     #[clap(subcommand)]
     command: Command,
 }
@@ -262,6 +267,7 @@ impl Args {
             sync: SyncConfig {
                 syncman_dir: PathBuf::from(&self.syncman_dir),
             },
+            sync_interval: self.sync_interval,
             rest: self
                 .rest_addr
                 .map_or(Default::default(), |addr| RestConfig { addr }),

@@ -2,6 +2,7 @@ use std::{
     ffi::{CStr, c_char, c_ushort},
     path::PathBuf,
     str::FromStr,
+    time::Duration,
 };
 
 use iroh::NodeId;
@@ -43,6 +44,7 @@ fn init_tracing_subscriber() {
 pub unsafe extern "C" fn run_atman(
     identity: *const c_char,
     syncman_dir: *const c_char,
+    sync_interval_secs: u64,
 ) -> c_ushort {
     init_tracing_subscriber();
 
@@ -64,6 +66,11 @@ pub unsafe extern "C" fn run_atman(
         .to_str()
         .expect("Invalid UTF-8 string for syncman_dir")
         .to_string();
+    let sync_interval = if sync_interval_secs == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(sync_interval_secs))
+    };
 
     info!("Initializing Atman...");
     let (atman, command_sender) = match Atman::new(Config {
@@ -72,6 +79,7 @@ pub unsafe extern "C" fn run_atman(
         sync: sync::Config {
             syncman_dir: PathBuf::from(syncman_dir),
         },
+        sync_interval,
         #[cfg(feature = "rest")]
         rest: Default::default(),
     }) {

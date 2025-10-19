@@ -1,4 +1,7 @@
-use std::fmt::{self, Debug, Formatter};
+use std::{
+    collections::HashSet,
+    fmt::{self, Debug, Formatter},
+};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -25,6 +28,9 @@ pub enum Message {
         msg: GetMessage,
         reply_sender: oneshot::Sender<Result<Document, Error>>,
     },
+    ListDocuments {
+        reply_sender: oneshot::Sender<HashSet<(DocSpace, DocId)>>,
+    },
     InitiateSync {
         msg: InitiateSyncMessage,
         reply_sender: oneshot::Sender<Result<SyncHandle, Error>>,
@@ -42,6 +48,7 @@ impl Debug for Message {
             Self::Update { msg, .. } => f.debug_tuple("Update").field(msg).finish(),
             Self::ListInsert { msg, .. } => f.debug_tuple("ListInsert").field(msg).finish(),
             Self::Get { msg, .. } => f.debug_tuple("Get").field(msg).finish(),
+            Self::ListDocuments { .. } => f.debug_tuple("ListDocuments").finish(),
             Self::InitiateSync { msg, .. } => f.debug_tuple("InitiateSync").field(msg).finish(),
             Self::ApplySync { .. } => f.debug_tuple("ApplySync").finish(),
         }

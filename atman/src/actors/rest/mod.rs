@@ -9,7 +9,7 @@ use tower_http::timeout::TimeoutLayer;
 use tracing::{error, info, warn};
 
 pub use crate::actors::rest::error::Error;
-use crate::{Status, actors::network};
+use crate::{actors::network, command::Status};
 
 pub struct Actor {
     server_join_handle: JoinHandle<()>,

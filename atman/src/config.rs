@@ -1,4 +1,4 @@
-use std::array::TryFromSliceError;
+use std::{array::TryFromSliceError, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +12,8 @@ pub struct Config {
     pub identity: ed25519_dalek::SecretKey,
     pub network: network::Config,
     pub sync: sync::Config,
+    #[serde(with = "humantime_serde")]
+    pub sync_interval: Option<Duration>,
     #[cfg(feature = "rest")]
     pub rest: rest::Config,
 }
