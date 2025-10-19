@@ -115,7 +115,10 @@ impl Atman {
                 },
                 Some(cmd) = self.command_receiver.recv() => {
                     debug!("Command received: {:?}", cmd);
-                    handle_command(cmd, &network_handle, &sync_handle).await;
+                    if handle_command(cmd, &network_handle, &sync_handle).await {
+                        info!("Shutting down Atman...");
+                        break;
+                    }
                 }
             }
         }

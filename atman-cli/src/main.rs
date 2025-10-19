@@ -72,6 +72,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         .inspect_err(|e| {
             error!("Channel send error: {e}");
         })?;
+    info!("Waiting for Atman to terminate...");
     if let Err(e) = atman_task.await {
         error!("Failed to wait until Atman is terminated: {e}");
     }
@@ -101,6 +102,8 @@ async fn daemonize() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
+
+    info!("Termination signal received");
 }
 
 async fn handle_status(command_sender: &mpsc::Sender<atman::Command>) {
