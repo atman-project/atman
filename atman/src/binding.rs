@@ -43,6 +43,7 @@ fn init_tracing_subscriber() {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn run_atman(
     identity: *const c_char,
+    network_key: *const c_char,
     syncman_dir: *const c_char,
     sync_interval_secs: u64,
 ) -> c_ushort {
@@ -62,6 +63,15 @@ pub unsafe extern "C" fn run_atman(
         return 1;
     };
 
+    let network_key = unsafe { CStr::from_ptr(network_key) }
+        .to_str()
+        .expect("Invalid UTF-8 string for network_key")
+        .as_bytes();
+    let Ok(network_key) = secret_key_from_hex(network_key) else {
+        error!("Invalid network_key");
+        return 1;
+    };
+
     let syncman_dir = unsafe { CStr::from_ptr(syncman_dir) }
         .to_str()
         .expect("Invalid UTF-8 string for syncman_dir")
@@ -75,7 +85,9 @@ pub unsafe extern "C" fn run_atman(
     info!("Initializing Atman...");
     let (atman, command_sender) = match Atman::new(Config {
         identity,
-        network: network::Config { key: None },
+        network: network::Config {
+            key: Some(iroh::SecretKey::from_bytes(&network_key)),
+        },
         sync: sync::Config {
             syncman_dir: PathBuf::from(syncman_dir),
         },
