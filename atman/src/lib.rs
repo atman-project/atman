@@ -78,7 +78,13 @@ impl Atman {
 
         #[cfg(feature = "rest")]
         let _rest_handle = runner.run(
-            match rest::Actor::new(&self.config.rest, network_handle.clone()).await {
+            match rest::Actor::new(
+                &self.config.rest,
+                network_handle.clone(),
+                sync_handle.clone(),
+            )
+            .await
+            {
                 Ok(actor) => actor,
                 Err(e) => {
                     error!("Failed to create REST actor: {e:?}");
