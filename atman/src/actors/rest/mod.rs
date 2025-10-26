@@ -2,14 +2,23 @@ mod error;
 
 use std::{net::SocketAddr, time::Duration};
 
-use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::oneshot, task::JoinHandle};
 use tower_http::timeout::TimeoutLayer;
 use tracing::{error, info, warn};
 
 pub use crate::actors::rest::error::Error;
-use crate::{actors::network, command::Status};
+use crate::{
+    actors::{network, sync},
+    command::Status,
+};
 
 pub struct Actor {
     server_join_handle: JoinHandle<()>,
@@ -48,20 +57,26 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 struct ServerState {
     network_handle: actman::Handle<network::Actor>,
+    sync_handle: actman::Handle<sync::Actor>,
 }
 
 impl Actor {
     pub async fn new(
         config: &Config,
         network_handle: actman::Handle<network::Actor>,
+        sync_handle: actman::Handle<sync::Actor>,
     ) -> Result<Self, Error> {
         let router = Router::new()
             .route("/status", get(status))
+            .route("/document/{space}/{id}", get(get_document))
             .layer(
                 // Necessary for graceful shutdown
                 TimeoutLayer::new(REQUEST_TIMEOUT),
             )
-            .with_state(ServerState { network_handle });
+            .with_state(ServerState {
+                network_handle,
+                sync_handle,
+            });
         let listener = tokio::net::TcpListener::bind(config.addr)
             .await
             .map_err(|cause| Error::IO {
@@ -119,6 +134,48 @@ async fn status(State(state): State<ServerState>) -> impl IntoResponse {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
     Ok(Json(Status { node_id }))
+}
+
+async fn get_document(
+    State(state): State<ServerState>,
+    Path((space, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let (msg, reply_receiver) = sync::message::GetMessage {
+        doc_space: space.into(),
+        doc_id: id.into(),
+    }
+    .into();
+    state.sync_handle.send(msg).await;
+    let Ok(result) = reply_receiver.await else {
+        error!("failed to receive result for GetDocument from sync actor");
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, String::new()));
+    };
+
+    let document = match result {
+        Ok(document) => document,
+        Err(sync::Error::DocumentNotFound { doc_space, doc_id }) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("Document not found: {doc_space:?}/{doc_id:?}"),
+            ));
+        }
+        Err(e) => {
+            error!("sync actor returned error for GetDocument: {e}");
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, String::new()));
+        }
+    };
+
+    let Ok(json) = document.serialize().inspect_err(|e| {
+        error!("failed to serialize document: {e}");
+    }) else {
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, String::new()));
+    };
+    let Ok(json) = String::from_utf8(json).inspect_err(|e| {
+        error!("failed to convert serialized JSON document to UTF-8 string: {e}");
+    }) else {
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, String::new()));
+    };
+    Ok(json)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
