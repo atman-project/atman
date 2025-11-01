@@ -1,5 +1,5 @@
 use iroh::{
-    NodeId,
+    EndpointId,
     endpoint::{Connection, RecvStream, SendStream},
     protocol::Router,
 };
@@ -13,7 +13,7 @@ pub mod sync;
 
 /// Connect to a remote node and open a bidirectional stream.
 async fn connect(
-    node_id: NodeId,
+    node_id: EndpointId,
     router: &Router,
     alpn: &[u8],
 ) -> Result<(Connection, SendStream, RecvStream), Error> {

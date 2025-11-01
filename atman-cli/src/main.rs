@@ -7,7 +7,7 @@ use atman::{
     sync_message,
 };
 use clap::Parser;
-use iroh::NodeId;
+use iroh::EndpointId;
 use qrcode::{QrCode, QrResult, render::unicode};
 use tokio::{
     signal,
@@ -152,7 +152,10 @@ fn generate_qr(data: &[u8]) -> QrResult<String> {
     Ok(image)
 }
 
-async fn handle_connect_and_echo(command_sender: &mpsc::Sender<atman::Command>, node_id: NodeId) {
+async fn handle_connect_and_echo(
+    command_sender: &mpsc::Sender<atman::Command>,
+    node_id: EndpointId,
+) {
     info!("Connecting to node {node_id} to echo");
     let (reply_sender, reply_receiver) = oneshot::channel();
     if let Err(e) = command_sender
@@ -175,7 +178,7 @@ async fn handle_connect_and_echo(command_sender: &mpsc::Sender<atman::Command>, 
 
 async fn handle_connect_and_sync(
     command_sender: &mpsc::Sender<atman::Command>,
-    node_id: NodeId,
+    node_id: EndpointId,
     doc_space: DocSpace,
     doc_id: DocId,
 ) {
@@ -280,10 +283,10 @@ enum Command {
     Daemonize,
     Status,
     ConnectAndEcho {
-        node_id: NodeId,
+        node_id: EndpointId,
     },
     ConnectAndSync {
-        node_id: NodeId,
+        node_id: EndpointId,
         doc_space: DocSpace,
         doc_id: DocId,
     },

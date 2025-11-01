@@ -1,5 +1,5 @@
 use actman::Handle;
-use iroh::NodeId;
+use iroh::EndpointId;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tracing::error;
@@ -16,11 +16,11 @@ use crate::{
 #[derive(Debug)]
 pub enum Command {
     ConnectAndEcho {
-        node_id: NodeId,
+        node_id: EndpointId,
         reply_sender: oneshot::Sender<Result<(), network::Error>>,
     },
     ConnectAndSync {
-        node_id: NodeId,
+        node_id: EndpointId,
         doc_space: DocSpace,
         doc_id: DocId,
         reply_sender: oneshot::Sender<Result<(), network::Error>>,
@@ -34,7 +34,7 @@ pub enum Command {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Status {
-    pub node_id: NodeId,
+    pub node_id: EndpointId,
 }
 
 pub async fn handle_command(
@@ -81,7 +81,7 @@ pub async fn handle_command(
 }
 
 async fn handle_connect_and_echo_command(
-    node_id: NodeId,
+    node_id: EndpointId,
     reply_sender: oneshot::Sender<Result<(), network::Error>>,
     network_handle: &Handle<network::Actor>,
 ) {
@@ -94,7 +94,7 @@ async fn handle_connect_and_echo_command(
 }
 
 async fn handle_connect_and_sync_command(
-    node_id: NodeId,
+    node_id: EndpointId,
     doc_space: DocSpace,
     doc_id: DocId,
     reply_sender: oneshot::Sender<Result<(), network::Error>>,

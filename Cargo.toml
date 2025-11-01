@@ -11,7 +11,7 @@ readme     = "README.md"
 repository = "https://github.com/atman-project/atman"
 
 [workspace.dependencies]
-iroh               = "0.90"
+iroh               = "0.94"
 serde              = "1"
 serde_json         = "1"
 thiserror          = "2"

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use actman::Handle;
-use iroh::NodeId;
+use iroh::EndpointId;
 use tokio::sync::oneshot;
 use tracing::{error, info};
 
@@ -15,7 +15,7 @@ use crate::{
 pub async fn handle_sync_tick<SyncActor, NetworkActor>(
     sync_handle: &Handle<SyncActor>,
     network_handle: &Handle<NetworkActor>,
-    local_node_id: &NodeId,
+    local_node_id: &EndpointId,
 ) -> Result<usize, Error>
 where
     SyncActor: actman::Actor<Message = sync::message::Message>,
@@ -53,7 +53,7 @@ where
 
 async fn load_remote_nodes<SyncActor>(
     sync_handle: &Handle<SyncActor>,
-    local_node_id: &NodeId,
+    local_node_id: &EndpointId,
 ) -> Result<HashSet<Node>, Error>
 where
     SyncActor: actman::Actor<Message = sync::message::Message>,
@@ -95,7 +95,7 @@ where
 }
 
 async fn request_sync<NetworkActor>(
-    node_id: NodeId,
+    node_id: EndpointId,
     doc_space: DocSpace,
     doc_id: DocId,
     network_handle: &Handle<NetworkActor>,
@@ -212,16 +212,16 @@ mod tests {
         }
     }
 
-    fn derive_node_id(key: u8) -> NodeId {
+    fn derive_node_id(key: u8) -> EndpointId {
         SecretKey::from_bytes(&[key; 32]).public()
     }
 
     struct DummyNetworkActor {
-        sync_message_forwarder: mpsc::Sender<(NodeId, DocSpace, DocId)>,
+        sync_message_forwarder: mpsc::Sender<(EndpointId, DocSpace, DocId)>,
     }
 
     impl DummyNetworkActor {
-        fn new() -> (Self, mpsc::Receiver<(NodeId, DocSpace, DocId)>) {
+        fn new() -> (Self, mpsc::Receiver<(EndpointId, DocSpace, DocId)>) {
             let (sync_message_forwarder, sync_message_receiver) = mpsc::channel(10);
             (
                 Self {
