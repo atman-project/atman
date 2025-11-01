@@ -1,9 +1,16 @@
 mod error;
 mod protocols;
 
-use iroh::{Endpoint, NodeId, SecretKey, Watcher as _, protocol::Router};
+use std::time::Duration;
+
+use iroh::{
+    Endpoint, EndpointId, RelayMode, SecretKey, discovery::mdns::MdnsDiscovery, protocol::Router,
+};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::timeout,
+};
 use tracing::{debug, error, info, warn};
 
 pub use crate::actors::network::error::Error;
@@ -55,6 +62,7 @@ impl actman::Actor for Actor {
 }
 
 const EVENT_CHANNEL_SIZE: usize = 128;
+const ENDPOINT_INIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl Actor {
     pub async fn new(
@@ -66,26 +74,36 @@ impl Actor {
             builder = builder.secret_key(key.clone());
         }
         let endpoint = builder
-            .discovery_n0()
-            .discovery_local_network()
+            .discovery(MdnsDiscovery::builder())
             .alpns(vec![
                 echo::Protocol::ALPN.to_vec(),
                 sync::Protocol::ALPN.to_vec(),
             ])
+            .relay_mode(RelayMode::Default)
             .bind()
             .await?;
+
         let (echo_event_sender, echo_event_receiver) = mpsc::channel(EVENT_CHANNEL_SIZE);
         let echo = echo::Protocol::new(echo_event_sender);
+
         let (sync_event_sender, sync_event_receiver) = mpsc::channel(EVENT_CHANNEL_SIZE);
         let sync = sync::Protocol::new(sync_event_sender, sync_actor_handle.clone());
+
         let router = Router::builder(endpoint)
             .accept(echo::Protocol::ALPN, echo)
             .accept(sync::Protocol::ALPN, sync)
             .spawn();
-        match router.endpoint().node_addr().initialized().await {
-            Ok(addr) => info!("Node address initialized: {addr:?}"),
-            Err(e) => error!("Failed to watch for node address to be initialized: {e:?}"),
+        if timeout(ENDPOINT_INIT_TIMEOUT, router.endpoint().online())
+            .await
+            .is_err()
+        {
+            return Err(Error::EndpointInitTimeout);
         }
+        info!(
+            "Endpoint address initialized: {:?}",
+            router.endpoint().addr()
+        );
+
         Ok(Self {
             router,
             sync_actor_handle,
@@ -119,7 +137,7 @@ impl Actor {
             }
             Message::Status { reply_sender } => {
                 let _ = reply_sender
-                    .send(self.router.endpoint().node_id())
+                    .send(self.router.endpoint().id())
                     .inspect_err(|e| error!("Failed to send reply: {e:?}"));
             }
         }
@@ -127,7 +145,7 @@ impl Actor {
 
     async fn handle_echo_message(
         &self,
-        node_id: NodeId,
+        node_id: EndpointId,
         reply_sender: oneshot::Sender<Result<(), Error>>,
     ) {
         debug!("Handling Echo message to {node_id}");
@@ -136,7 +154,7 @@ impl Actor {
 
     async fn handle_sync_message(
         &self,
-        node_id: NodeId,
+        node_id: EndpointId,
         doc_space: DocSpace,
         doc_id: DocId,
         reply_sender: oneshot::Sender<Result<(), Error>>,
@@ -156,18 +174,18 @@ impl Actor {
 
 pub enum Message {
     ConnectAndEcho {
-        node_id: NodeId,
+        node_id: EndpointId,
         reply_sender: oneshot::Sender<Result<(), Error>>,
     },
     // TODO: Considering a command for syncing multiple docs at once
     ConnectAndSync {
-        node_id: NodeId,
+        node_id: EndpointId,
         doc_space: DocSpace,
         doc_id: DocId,
         reply_sender: oneshot::Sender<Result<(), Error>>,
     },
     Status {
-        reply_sender: oneshot::Sender<NodeId>,
+        reply_sender: oneshot::Sender<EndpointId>,
     },
 }
 

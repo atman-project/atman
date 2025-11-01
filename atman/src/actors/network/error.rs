@@ -6,6 +6,8 @@ use iroh::endpoint::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Endpoint initialization timed out")]
+    EndpointInitTimeout,
     #[error("Network error: {0}")]
     Network(Box<dyn std::error::Error + Send + Sync>),
     #[error("Sync actor error: {0}")]

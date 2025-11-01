@@ -1,12 +1,12 @@
-use std::str::FromStr;
+use std::str::FromStr as _;
 
-use iroh::{KeyParsingError, NodeId};
+use iroh::{EndpointId, KeyParsingError};
 
 use crate::doc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Node {
-    pub id: NodeId,
+    pub id: EndpointId,
 }
 
 impl TryFrom<&doc::protocol::node::Node> for Node {
@@ -14,7 +14,7 @@ impl TryFrom<&doc::protocol::node::Node> for Node {
 
     fn try_from(node: &doc::protocol::node::Node) -> Result<Self, Self::Error> {
         Ok(Self {
-            id: NodeId::from_str(node.id.as_str())?,
+            id: EndpointId::from_str(node.id.as_str())?,
         })
     }
 }

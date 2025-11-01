@@ -1,5 +1,5 @@
 use actman::Handle;
-use iroh::NodeId;
+use iroh::EndpointId;
 use tokio::sync::oneshot;
 use tracing::info;
 
@@ -9,7 +9,7 @@ use crate::{
     doc::{self, Document},
 };
 
-pub async fn get_local_node_id(network_handle: &Handle<network::Actor>) -> NodeId {
+pub async fn get_local_node_id(network_handle: &Handle<network::Actor>) -> EndpointId {
     let (reply_sender, reply_receiver) = oneshot::channel();
     network_handle
         .send(network::Message::Status { reply_sender })
@@ -18,7 +18,7 @@ pub async fn get_local_node_id(network_handle: &Handle<network::Actor>) -> NodeI
 }
 
 pub async fn save_local_node_id(
-    local_node_id: NodeId,
+    local_node_id: EndpointId,
     sync_handle: &Handle<sync::Actor>,
 ) -> Result<(), Error> {
     // Load the nodes document stored in the sync actor

@@ -1,11 +1,11 @@
 use std::{
     ffi::{CStr, CString, c_char, c_ushort},
     path::PathBuf,
-    str::FromStr,
+    str::FromStr as _,
     time::Duration,
 };
 
-use iroh::NodeId;
+use iroh::EndpointId;
 use once_cell::sync::OnceCell;
 use tokio::{
     runtime::Runtime,
@@ -147,7 +147,8 @@ fn send_command(cmd: Command) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_connect_and_sync_command(cmd: ConnectAndSyncCommand) {
     let node_id = unsafe { std::slice::from_raw_parts(cmd.node_id, cmd.node_id_len) };
-    let node_id = match NodeId::from_str(String::from_utf8_lossy(node_id).to_string().as_str()) {
+    let node_id = match EndpointId::from_str(String::from_utf8_lossy(node_id).to_string().as_str())
+    {
         Ok(node_id) => node_id,
         Err(e) => {
             error!("Invalid NodeId: {e}");

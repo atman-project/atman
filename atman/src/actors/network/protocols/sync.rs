@@ -4,7 +4,7 @@ use std::{
 };
 
 use iroh::{
-    NodeId,
+    EndpointId,
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
 };
@@ -64,7 +64,7 @@ impl Protocol {
 impl Protocol {
     async fn handle_connection(self, connection: Connection) -> Result<(), AcceptError> {
         // Wait for the connection to be fully established.
-        let node_id = connection.remote_node_id()?;
+        let node_id = connection.remote_id()?;
         if let Err(e) = self.event_sender.send(Event::Accepted { node_id }).await {
             error!("Failed to send sync event to the channel: {e:?}");
         }
@@ -82,7 +82,7 @@ impl Protocol {
 
     async fn handle_connection_0(&self, connection: &Connection) -> Result<(), AcceptError> {
         // We can get the remote's node id from the connection.
-        let node_id = connection.remote_node_id()?;
+        let node_id = connection.remote_id()?;
         info!("Accepted connection from {node_id}");
 
         // Our protocol is a simple request-response protocol, so we expect the
@@ -101,7 +101,7 @@ impl Protocol {
     }
 
     pub async fn connect_and_spawn(
-        node_id: NodeId,
+        node_id: EndpointId,
         doc_space: DocSpace,
         doc_id: DocId,
         router: &Router,
@@ -344,10 +344,10 @@ where
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Event {
     Accepted {
-        node_id: NodeId,
+        node_id: EndpointId,
     },
     Closed {
-        node_id: NodeId,
+        node_id: EndpointId,
         error: Option<String>,
     },
 }
