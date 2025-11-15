@@ -44,6 +44,7 @@ fn init_tracing_subscriber() {
 pub unsafe extern "C" fn run_atman(
     identity: *const c_char,
     network_key: *const c_char,
+    custom_relay_url: *const c_char,
     syncman_dir: *const c_char,
     sync_interval_secs: u64,
 ) -> c_ushort {
@@ -72,6 +73,23 @@ pub unsafe extern "C" fn run_atman(
         return 1;
     };
 
+    let custom_relay_url = {
+        if custom_relay_url.is_null() {
+            None
+        } else {
+            let url_str = unsafe { CStr::from_ptr(custom_relay_url) }
+                .to_str()
+                .expect("Invalid UTF-8 string for custom_relay_url");
+            match url_str.parse() {
+                Ok(url) => Some(url),
+                Err(e) => {
+                    error!("Invalid custom_relay_url: {e}");
+                    return 1;
+                }
+            }
+        }
+    };
+
     let syncman_dir = unsafe { CStr::from_ptr(syncman_dir) }
         .to_str()
         .expect("Invalid UTF-8 string for syncman_dir")
@@ -87,6 +105,7 @@ pub unsafe extern "C" fn run_atman(
         identity,
         network: network::Config {
             key: Some(iroh::SecretKey::from_bytes(&network_key)),
+            custom_relay_url,
         },
         sync: sync::Config {
             syncman_dir: PathBuf::from(syncman_dir),

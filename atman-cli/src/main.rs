@@ -15,6 +15,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
+use url::Url;
 
 #[tokio::main]
 async fn main() {
@@ -241,6 +242,8 @@ struct Args {
     identity: String,
     #[clap(long)]
     network_key: Option<String>,
+    #[arg(long, value_parser = Url::parse)]
+    custom_relay_url: Option<Url>,
     #[clap(long)]
     rest_addr: Option<SocketAddr>,
     #[clap(long)]
@@ -266,7 +269,10 @@ impl Args {
 
         Ok(atman::Config {
             identity,
-            network: NetworkConfig { key: network_key },
+            network: NetworkConfig {
+                key: network_key,
+                custom_relay_url: self.custom_relay_url.clone(),
+            },
             sync: SyncConfig {
                 syncman_dir: PathBuf::from(&self.syncman_dir),
             },

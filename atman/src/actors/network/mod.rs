@@ -4,7 +4,8 @@ mod protocols;
 use std::time::Duration;
 
 use iroh::{
-    Endpoint, EndpointId, RelayMode, SecretKey, discovery::mdns::MdnsDiscovery, protocol::Router,
+    Endpoint, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey, discovery::mdns::MdnsDiscovery,
+    protocol::Router,
 };
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -12,6 +13,7 @@ use tokio::{
     time::timeout,
 };
 use tracing::{debug, error, info, warn};
+use url::Url;
 
 pub use crate::actors::network::error::Error;
 use crate::{
@@ -79,7 +81,7 @@ impl Actor {
                 echo::Protocol::ALPN.to_vec(),
                 sync::Protocol::ALPN.to_vec(),
             ])
-            .relay_mode(RelayMode::Default)
+            .relay_mode(config.relay_mode())
             .bind()
             .await?;
 
@@ -192,4 +194,15 @@ pub enum Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub key: Option<SecretKey>,
+    pub custom_relay_url: Option<Url>,
+}
+
+impl Config {
+    fn relay_mode(&self) -> RelayMode {
+        if let Some(url) = &self.custom_relay_url {
+            RelayMode::Custom(RelayMap::from(RelayUrl::from(url.clone())))
+        } else {
+            RelayMode::Default
+        }
+    }
 }

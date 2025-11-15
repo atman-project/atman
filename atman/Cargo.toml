@@ -31,6 +31,7 @@ tokio              = { workspace = true, features = ["rt-multi-thread"] }
 tower-http         = { version = "0.6", features = ["timeout"], optional = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
+url                = "2"
 uuid               = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
