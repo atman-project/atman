@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 
 use atman::{
-    Atman, Error, NetworkConfig, RestConfig, SyncConfig,
+    Atman, BlobTicket, Error, NetworkConfig, RestConfig, SyncConfig,
     config::secret_key_from_hex,
     doc::{DocId, DocSpace},
     sync_message,
@@ -63,6 +63,14 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::GetDocument { doc_space, doc_id } => {
             handle_get_document(&command_sender, doc_space, doc_id).await;
+        }
+        Command::SendFiles { paths } => {
+            handle_add_files(&command_sender, paths).await;
+            info!("Keeping node alive so peers can fetch the blob. Press Ctrl-C to stop.");
+            daemonize().await;
+        }
+        Command::DownloadFiles { ticket, save_dir } => {
+            handle_download_files(&command_sender, ticket, save_dir).await;
         }
     }
 
@@ -236,6 +244,66 @@ async fn handle_get_document(
     }
 }
 
+async fn handle_add_files(command_sender: &mpsc::Sender<atman::Command>, paths: Vec<PathBuf>) {
+    info!(?paths, "Adding files");
+    let (reply_sender, reply_receiver) = oneshot::channel();
+    if let Err(e) = command_sender
+        .send(atman::Command::SendFiles {
+            paths,
+            reply_sender,
+        })
+        .await
+    {
+        error!("Channel send error: {e}");
+        return;
+    }
+    match reply_receiver.await {
+        Ok(Ok(ticket)) => {
+            let s = ticket.to_string();
+            println!("============================");
+            println!(" Ticket");
+            println!("============================");
+            println!("{s}");
+            match generate_qr(s.as_bytes()) {
+                Ok(code) => println!("{code}"),
+                Err(e) => error!("Failed to render QR: {e}"),
+            }
+        }
+        Ok(Err(e)) => error!("Failed to add blob: {e:?}"),
+        Err(e) => error!("Failed to receive reply: {e:?}"),
+    }
+}
+
+async fn handle_download_files(
+    command_sender: &mpsc::Sender<atman::Command>,
+    ticket: BlobTicket,
+    save_dir: PathBuf,
+) {
+    info!(?save_dir, "Downloading files");
+    let (reply_sender, reply_receiver) = oneshot::channel();
+    if let Err(e) = command_sender
+        .send(atman::Command::DownloadFiles {
+            ticket,
+            save_dir,
+            reply_sender,
+        })
+        .await
+    {
+        error!("Channel send error: {e}");
+        return;
+    }
+    match reply_receiver.await {
+        Ok(Ok(paths)) => {
+            println!("Saved {} file(s):", paths.len());
+            for path in &paths {
+                println!("  {}", path.display());
+            }
+        }
+        Ok(Err(e)) => error!("Failed to download files: {e:?}"),
+        Err(e) => error!("Failed to receive reply: {e:?}"),
+    }
+}
+
 #[derive(Debug, Parser)]
 struct Args {
     #[clap(long)]
@@ -299,5 +367,17 @@ enum Command {
     GetDocument {
         doc_space: DocSpace,
         doc_id: DocId,
+    },
+    /// Import file(s) into the local blob store and print a shareable ticket
+    /// (plus QR rendering) the receiver can scan.
+    SendFiles {
+        #[clap(required = true, num_args = 1..)]
+        paths: Vec<PathBuf>,
+    },
+    /// Pull file(s) using a ticket and save it under `save_dir`.
+    DownloadFiles {
+        ticket: BlobTicket,
+        #[clap(long)]
+        save_dir: PathBuf,
     },
 }

@@ -382,3 +382,158 @@ pub unsafe extern "C" fn free_string(str: *mut c_char) {
         // _cstring is dropped here.
     }
 }
+
+/// Import one or more files into atman's blob store and return a shareable
+/// ticket. Returns `NULL` on error.
+///
+/// `file_paths` is a single C string containing newline-separated absolute
+/// paths — one file per line.
+///
+/// # Safety
+/// `file_paths` must be a valid null-terminated UTF-8 C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn send_atman_blobs_add_files_command(
+    file_paths: *const c_char,
+) -> *mut c_char {
+    let paths = match unsafe { CStr::from_ptr(file_paths) }.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Invalid UTF-8 file_paths: {e}");
+            return std::ptr::null_mut();
+        }
+    };
+    let paths: Vec<PathBuf> = paths
+        .split('\n')
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    if paths.is_empty() {
+        error!("send_atman_add_blob_command: no paths supplied");
+        return std::ptr::null_mut();
+    }
+
+    let (reply_sender, reply_receiver) = oneshot::channel();
+    send_command(Command::SendFiles {
+        paths,
+        reply_sender,
+    });
+
+    match reply_receiver.blocking_recv() {
+        Ok(Ok(ticket)) => {
+            info!("AddBlob succeeded");
+            let s = ticket.to_string();
+            CString::new(s).expect("ticket string is ASCII").into_raw()
+        }
+        Ok(Err(e)) => {
+            error!("AddBlob failed: {e:?}");
+            std::ptr::null_mut()
+        }
+        Err(e) => {
+            error!("Failed to receive AddBlob reply: {e:?}");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Receiver side: parse `ticket`, pull every blob it references, and save
+/// each one into `save_dir`. On success, returns the saved paths as a
+/// newline-separated C string (one path per line; caller frees with
+/// [`free_string`]). Returns `NULL` on error.
+///
+/// # Safety
+/// `ticket` and `save_dir` must be valid null-terminated UTF-8 C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn send_atman_blobs_download_files_command(
+    ticket: *const c_char,
+    save_dir: *const c_char,
+) -> *mut c_char {
+    let ticket_str = match unsafe { CStr::from_ptr(ticket) }.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Invalid UTF-8 ticket: {e}");
+            return std::ptr::null_mut();
+        }
+    };
+    let ticket = match crate::BlobTicket::from_str(ticket_str) {
+        Ok(t) => t,
+        Err(e) => {
+            error!("Failed to parse ticket: {e}");
+            return std::ptr::null_mut();
+        }
+    };
+
+    let save_dir = match unsafe { CStr::from_ptr(save_dir) }.to_str() {
+        Ok(s) => PathBuf::from(s),
+        Err(e) => {
+            error!("Invalid UTF-8 save_dir: {e}");
+            return std::ptr::null_mut();
+        }
+    };
+
+    let (reply_sender, reply_receiver) = oneshot::channel();
+    send_command(Command::DownloadFiles {
+        ticket,
+        save_dir,
+        reply_sender,
+    });
+
+    match reply_receiver.blocking_recv() {
+        Ok(Ok(paths)) => {
+            info!(count = paths.len(), "DownloadBlob succeeded");
+            let joined = paths
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("\n");
+            CString::new(joined)
+                .expect("paths contain no null bytes")
+                .into_raw()
+        }
+        Ok(Err(e)) => {
+            error!("DownloadBlob failed: {e:?}");
+            std::ptr::null_mut()
+        }
+        Err(e) => {
+            error!("Failed to receive DownloadBlob reply: {e:?}");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Returns how many distinct receivers have fully pulled the ticket.
+/// Returns 0 if the ticket is unknown.
+///
+/// # Safety
+/// `ticket` must be a valid null-terminated UTF-8 C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn send_atman_blobs_files_transfer_count_command(
+    ticket: *const c_char,
+) -> u64 {
+    let ticket = match unsafe { CStr::from_ptr(ticket) }.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Invalid UTF-8 ticket: {e}");
+            return 0;
+        }
+    };
+    let ticket = match crate::BlobTicket::from_str(ticket) {
+        Ok(t) => t,
+        Err(e) => {
+            error!("Failed to parse ticket: {e}");
+            return 0;
+        }
+    };
+
+    let (reply_sender, reply_receiver) = oneshot::channel();
+    send_command(Command::FilesTransferCount {
+        hash: ticket.inner.hash(),
+        reply_sender,
+    });
+    match reply_receiver.blocking_recv() {
+        Ok(count) => count.unwrap_or(0),
+        Err(e) => {
+            error!("Failed to receive TransferCount reply: {e:?}");
+            0
+        }
+    }
+}

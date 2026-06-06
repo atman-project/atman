@@ -1,7 +1,7 @@
 mod error;
 mod protocols;
 
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use iroh::{
     Endpoint, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey, discovery::mdns::MdnsDiscovery,
@@ -15,7 +15,13 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 use url::Url;
 
-pub use crate::actors::network::error::Error;
+pub use crate::actors::network::{
+    error::Error,
+    protocols::blobs::{
+        Blobs,
+        ticket::{BlobTicket, BlobTicketError},
+    },
+};
 use crate::{
     actors::network::protocols::{echo, sync},
     doc::{DocId, DocSpace},
@@ -24,6 +30,7 @@ use crate::{
 pub struct Actor {
     router: Router,
     sync_actor_handle: actman::Handle<crate::sync::Actor>,
+    blobs: Blobs,
     echo_event_receiver: mpsc::Receiver<echo::Event>,
     sync_event_receiver: mpsc::Receiver<sync::Event>,
 }
@@ -80,6 +87,7 @@ impl Actor {
             .alpns(vec![
                 echo::Protocol::ALPN.to_vec(),
                 sync::Protocol::ALPN.to_vec(),
+                iroh_blobs::ALPN.to_vec(),
             ])
             .relay_mode(config.relay_mode())
             .bind()
@@ -91,9 +99,12 @@ impl Actor {
         let (sync_event_sender, sync_event_receiver) = mpsc::channel(EVENT_CHANNEL_SIZE);
         let sync = sync::Protocol::new(sync_event_sender, sync_actor_handle.clone());
 
+        let (blobs, blobs_protocol) = Blobs::new(endpoint.clone());
+
         let router = Router::builder(endpoint)
             .accept(echo::Protocol::ALPN, echo)
             .accept(sync::Protocol::ALPN, sync)
+            .accept(iroh_blobs::ALPN, blobs_protocol)
             .spawn();
         if timeout(ENDPOINT_INIT_TIMEOUT, router.endpoint().online())
             .await
@@ -109,6 +120,7 @@ impl Actor {
         Ok(Self {
             router,
             sync_actor_handle,
+            blobs,
             echo_event_receiver,
             sync_event_receiver,
         })
@@ -141,6 +153,34 @@ impl Actor {
                 let _ = reply_sender
                     .send(self.router.endpoint().id())
                     .inspect_err(|e| error!("Failed to send reply: {e:?}"));
+            }
+            Message::SendFiles {
+                paths,
+                reply_sender,
+            } => {
+                let result = self.blobs.add_files(paths).await.map_err(Error::from);
+                let _ = reply_sender
+                    .send(result)
+                    .inspect_err(|_| error!("Failed to send AddBlob reply"));
+            }
+            Message::DownloadFiles {
+                ticket,
+                save_dir,
+                reply_sender,
+            } => {
+                let result = self
+                    .blobs
+                    .download(ticket, save_dir)
+                    .await
+                    .map_err(Error::from);
+                let _ = reply_sender
+                    .send(result)
+                    .inspect_err(|_| error!("Failed to send DownloadBlob reply"));
+            }
+            Message::FilesTransferCount { hash, reply_sender } => {
+                let _ = reply_sender
+                    .send(self.blobs.transfer_count(hash).await)
+                    .inspect_err(|_| error!("Failed to send TransferCount reply"));
             }
         }
     }
@@ -188,6 +228,25 @@ pub enum Message {
     },
     Status {
         reply_sender: oneshot::Sender<EndpointId>,
+    },
+    /// Import one or more files into the local blob store and
+    /// return a shareable [`BlobTicket`].
+    SendFiles {
+        paths: Vec<PathBuf>,
+        reply_sender: oneshot::Sender<Result<BlobTicket, Error>>,
+    },
+    /// Download the files described by `ticket` and export every contained file
+    /// into `save_dir`. Returns one path per file written.
+    DownloadFiles {
+        ticket: BlobTicket,
+        save_dir: PathBuf,
+        reply_sender: oneshot::Sender<Result<Vec<PathBuf>, Error>>,
+    },
+    /// Returns how many distinct receivers have fully pulled the
+    /// ticket whose hash is `hash`.
+    FilesTransferCount {
+        hash: iroh_blobs::Hash,
+        reply_sender: oneshot::Sender<Option<u64>>,
     },
 }
 

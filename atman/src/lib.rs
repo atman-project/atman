@@ -28,6 +28,7 @@ pub use error::Error;
 mod models;
 pub use config::Config;
 pub mod doc;
+pub use actors::network::{BlobTicket, BlobTicketError};
 
 pub struct Atman {
     config: Config,
