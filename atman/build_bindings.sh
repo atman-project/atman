@@ -53,9 +53,9 @@ if [[ "$BUILD_MODE" == "release" ]]; then
     CARGO_FLAGS="--release"
 fi
 
-# Default: build arm64 if no target was specified.
 if ! $BUILD_ARM64 && ! $BUILD_SIM_ARM64 && ! $BUILD_X86_64; then
-    BUILD_ARM64=true
+    "no target specified!"
+    exit 1
 fi
 
 cbindgen -l C -o ${TARGET_DIR}/${PROJECT_NAME}.h
@@ -66,20 +66,28 @@ LIB_NAME="lib${PROJECT_NAME}.a"
 if $BUILD_ARM64; then
     cargo build --target aarch64-apple-ios $CARGO_FLAGS $FEATURE_FLAGS
     lipo -info ${TARGET_DIR}/aarch64-apple-ios/${BUILD_MODE}/${LIB_NAME}
-    ls -lh ${TARGET_DIR}/aarch64-apple-ios/${BUILD_MODE}/${LIB_NAME}
 fi
 
 # Build for arm64 iOS simulator (Apple Silicon hosts)
 if $BUILD_SIM_ARM64; then
     cargo build --target aarch64-apple-ios-sim $CARGO_FLAGS $FEATURE_FLAGS
     lipo -info ${TARGET_DIR}/aarch64-apple-ios-sim/${BUILD_MODE}/${LIB_NAME}
-    ls -lh ${TARGET_DIR}/aarch64-apple-ios-sim/${BUILD_MODE}/${LIB_NAME}
 fi
 
 # Build for x86_64 (Intel iOS simulator)
 if $BUILD_X86_64; then
     cargo build --target x86_64-apple-ios $CARGO_FLAGS $FEATURE_FLAGS
     lipo -info ${TARGET_DIR}/x86_64-apple-ios/${BUILD_MODE}/${LIB_NAME}
+fi
+
+# Print results
+if $BUILD_ARM64; then
+    ls -lh ${TARGET_DIR}/aarch64-apple-ios/${BUILD_MODE}/${LIB_NAME}
+fi
+if $BUILD_SIM_ARM64; then
+    ls -lh ${TARGET_DIR}/aarch64-apple-ios-sim/${BUILD_MODE}/${LIB_NAME}
+fi
+if $BUILD_X86_64; then
     ls -lh ${TARGET_DIR}/x86_64-apple-ios/${BUILD_MODE}/${LIB_NAME}
 fi
 
