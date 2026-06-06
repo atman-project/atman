@@ -25,5 +25,5 @@ jobs:
       - name: Build bindings
         run: |
           cd atman
-          bash build_bindings.sh
+          bash build_bindings.sh --all-features
           cd -

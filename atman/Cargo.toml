@@ -15,21 +15,21 @@ crate-type = ["lib", "staticlib"]
 [dependencies]
 actman             = "0.1"
 async-trait        = "0.1"
-automerge          = "0.6"
-autosurgeon        = { features = ["uuid"], version = "0.8" }
+automerge          = { optional = true, version = "0.6" }
+autosurgeon        = { features = ["uuid"], optional = true, version = "0.8" }
 axum               = { optional = true, version = "0.8" }
 data-encoding      = "2"
 ed25519-dalek      = { features = ["serde", "signature"], version = "2" }
 hex                = "0.4"
 humantime-serde    = "1"
 iroh               = { features = ["discovery-local-network"], workspace = true }
-iroh-blobs         = "0.96"
-irpc               = "0.10"
+iroh-blobs         = { optional = true, version = "0.96" }
+irpc               = { optional = true, version = "0.10" }
 once_cell          = "1"
 postcard           = { features = ["alloc"], version = "1" }
 serde              = { features = ["derive"], workspace = true }
 serde_json         = { workspace = true }
-syncman            = { git = "https://github.com/atman-project/syncman" }
+syncman            = { git = "https://github.com/atman-project/syncman", optional = true }
 thiserror          = { workspace = true }
 tokio              = { features = ["rt-multi-thread"], workspace = true }
 tower-http         = { features = ["timeout"], optional = true, version = "0.6" }
@@ -44,7 +44,9 @@ test-log = "0.2"
 
 [features]
 default = []
+blobs   = ["dep:iroh-blobs", "dep:irpc"]
 rest    = ["axum", "tower-http"]
+sync    = ["dep:automerge", "dep:autosurgeon", "dep:syncman"]
 
 [package.metadata.cargo-machete]
 ignored = ["humantime-serde"] # used with serde_with derivation

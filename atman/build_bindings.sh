@@ -5,25 +5,51 @@ set -uexo pipefail
 PROJECT_NAME="atman"
 TARGET_DIR="../target"
 
-# Check for --release flag
 BUILD_MODE="debug"
-if [[ "$*" == *"--release"* ]]; then
-    BUILD_MODE="release"
-    CARGO_FLAGS="--release"
-else
-    CARGO_FLAGS=""
-fi
-
-# Architecture flags
 BUILD_ARM64=false
 BUILD_X86_64=false
-if [[ "$*" == *"--arm64"* ]]; then
-    BUILD_ARM64=true
+FEATURE_FLAGS=""
+
+while (( $# )); do
+    case "$1" in
+        --release)
+            BUILD_MODE="release"
+            ;;
+        --arm64)
+            BUILD_ARM64=true
+            ;;
+        --x86_64)
+            BUILD_X86_64=true
+            ;;
+        --features)
+            if [[ -n "$FEATURE_FLAGS" ]]; then
+                echo "build_bindings.sh: --features and --all-features are mutually exclusive" >&2
+                exit 2
+            fi
+            FEATURE_FLAGS="--features $2"
+            shift
+            ;;
+        --all-features)
+            if [[ -n "$FEATURE_FLAGS" ]]; then
+                echo "build_bindings.sh: --features and --all-features are mutually exclusive" >&2
+                exit 2
+            fi
+            FEATURE_FLAGS="--all-features"
+            ;;
+        *)
+            echo "build_bindings.sh: unknown argument: $1" >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
+CARGO_FLAGS=""
+if [[ "$BUILD_MODE" == "release" ]]; then
+    CARGO_FLAGS="--release"
 fi
-if [[ "$*" == *"--x86_64"* ]]; then
-    BUILD_X86_64=true
-fi
-# Default: build both if no specific arch is provided
+
+# Default: build both arches if neither was requested.
 if ! $BUILD_ARM64 && ! $BUILD_X86_64; then
     BUILD_ARM64=true
     BUILD_X86_64=true
@@ -35,14 +61,14 @@ LIB_NAME="lib${PROJECT_NAME}.a"
 
 # Build for ARM64 (iOS devices)
 if $BUILD_ARM64; then
-    cargo build --target aarch64-apple-ios $CARGO_FLAGS
+    cargo build --target aarch64-apple-ios $CARGO_FLAGS $FEATURE_FLAGS
     lipo -info ${TARGET_DIR}/aarch64-apple-ios/${BUILD_MODE}/${LIB_NAME}
     ls -lh ${TARGET_DIR}/aarch64-apple-ios/${BUILD_MODE}/${LIB_NAME}
 fi
 
 # Build for x86_64 (iOS simulator)
 if $BUILD_X86_64; then
-    cargo build --target x86_64-apple-ios $CARGO_FLAGS
+    cargo build --target x86_64-apple-ios $CARGO_FLAGS $FEATURE_FLAGS
     lipo -info ${TARGET_DIR}/x86_64-apple-ios/${BUILD_MODE}/${LIB_NAME}
     ls -lh ${TARGET_DIR}/x86_64-apple-ios/${BUILD_MODE}/${LIB_NAME}
 fi

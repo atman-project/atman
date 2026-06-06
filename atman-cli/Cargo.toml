@@ -14,7 +14,7 @@ name = "atman"
 path = "src/main.rs"
 
 [dependencies]
-atman              = { features = ["rest"], path = "../atman" }
+atman              = { features = ["blobs", "rest", "sync"], path = "../atman" }
 clap               = { features = ["derive"], version = "4" }
 humantime          = "2"
 iroh               = { workspace = true }

@@ -18,7 +18,7 @@ use tracing::{error, info};
 
 use crate::{
     actors::network::{
-        Error,
+        Error as NetError,
         protocols::{close_conn, connect, wait_conn_closed},
     },
     doc::{DocId, DocSpace},
@@ -106,7 +106,7 @@ impl Protocol {
         doc_id: DocId,
         router: &Router,
         sync_actor_handle: &actman::Handle<crate::sync::Actor>,
-        reply_sender: oneshot::Sender<Result<(), Error>>,
+        reply_sender: oneshot::Sender<Result<(), NetError>>,
     ) {
         let (conn, mut send_stream, mut recv_stream) =
             match connect(node_id, router, Self::ALPN).await {
@@ -133,7 +133,7 @@ impl Protocol {
             .inspect_err(|e| error!("Failed to perform sync: {e:?}"));
             close_conn(&conn, &mut send_stream, result.is_err()).await;
             let _ = reply_sender
-                .send(result)
+                .send(result.map_err(NetError::Sync))
                 .inspect_err(|_| error!("failed to send reply"));
         });
     }
@@ -350,6 +350,20 @@ pub enum Event {
         node_id: EndpointId,
         error: Option<String>,
     },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Sync actor error: {0}")]
+    SyncActor(#[from] crate::actors::sync::Error),
+    #[error("Initial sync message was not generated")]
+    InitialSyncMessageNotGenerated,
+    #[error("Received unexpected finish message")]
+    UnexpectedFinishMessage,
+    #[error("Invalid doc space or id: {0}")]
+    InvalidDocSpaceId(#[from] std::string::FromUtf8Error),
+    #[error("IO error: {0}")]
+    IO(#[from] io::Error),
 }
 
 #[cfg(test)]

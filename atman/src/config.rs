@@ -1,17 +1,23 @@
-use std::{array::TryFromSliceError, time::Duration};
+use std::array::TryFromSliceError;
+#[cfg(feature = "sync")]
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::actors::network;
 #[cfg(feature = "rest")]
 use crate::actors::rest;
-use crate::actors::{network, sync};
+#[cfg(feature = "sync")]
+use crate::actors::sync;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(with = "secret_key_serde")]
     pub identity: ed25519_dalek::SecretKey,
     pub network: network::Config,
+    #[cfg(feature = "sync")]
     pub sync: sync::Config,
+    #[cfg(feature = "sync")]
     #[serde(with = "humantime_serde")]
     pub sync_interval: Option<Duration>,
     #[cfg(feature = "rest")]
