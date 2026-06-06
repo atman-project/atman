@@ -10,14 +10,10 @@ pub enum Error {
     EndpointInitTimeout,
     #[error("Network error: {0}")]
     Network(Box<dyn std::error::Error + Send + Sync>),
-    #[error("Sync actor error: {0}")]
-    SyncActor(#[from] crate::actors::sync::Error),
-    #[error("Initial sync message was not generated")]
-    InitialSyncMessageNotGenerated,
-    #[error("Received unexpected finish message")]
-    UnexpectedFinishMessage,
-    #[error("Invalid doc space or id: {0}")]
-    InvalidDocSpaceId(#[from] std::string::FromUtf8Error),
+    #[cfg(feature = "sync")]
+    #[error("Sync error: {0}")]
+    Sync(#[from] crate::actors::network::protocols::sync::Error),
+    #[cfg(feature = "blobs")]
     #[error("Blob error: {0}")]
     Blob(#[from] crate::actors::network::protocols::blobs::Error),
 }

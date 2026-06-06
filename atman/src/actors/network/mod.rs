@@ -1,7 +1,9 @@
 mod error;
 mod protocols;
 
-use std::{path::PathBuf, time::Duration};
+#[cfg(feature = "blobs")]
+use std::path::PathBuf;
+use std::time::Duration;
 
 use iroh::{
     Endpoint, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey, discovery::mdns::MdnsDiscovery,
@@ -15,23 +17,27 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 use url::Url;
 
-pub use crate::actors::network::{
-    error::Error,
-    protocols::blobs::{
-        Blobs,
-        ticket::{BlobTicket, BlobTicketError},
-    },
+pub use crate::actors::network::error::Error;
+#[cfg(feature = "blobs")]
+pub use crate::actors::network::protocols::blobs::{
+    Blobs,
+    ticket::{BlobTicket, BlobTicketError},
 };
+use crate::actors::network::protocols::echo;
+#[cfg(feature = "sync")]
 use crate::{
-    actors::network::protocols::{echo, sync},
+    actors::network::protocols::sync,
     doc::{DocId, DocSpace},
 };
 
 pub struct Actor {
     router: Router,
+    #[cfg(feature = "sync")]
     sync_actor_handle: actman::Handle<crate::sync::Actor>,
+    #[cfg(feature = "blobs")]
     blobs: Blobs,
     echo_event_receiver: mpsc::Receiver<echo::Event>,
+    #[cfg(feature = "sync")]
     sync_event_receiver: mpsc::Receiver<sync::Event>,
 }
 
@@ -39,7 +45,95 @@ pub struct Actor {
 impl actman::Actor for Actor {
     type Message = Message;
 
-    async fn run(mut self, mut state: actman::State<Self>) {
+    async fn run(mut self, state: actman::State<Self>) {
+        self.run_event_loop(state).await;
+        self.shutdown().await;
+    }
+}
+
+const EVENT_CHANNEL_SIZE: usize = 128;
+const ENDPOINT_INIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl Actor {
+    pub async fn new(
+        config: &Config,
+        #[cfg(feature = "sync")] sync_actor_handle: actman::Handle<crate::actors::sync::Actor>,
+    ) -> Result<Self, Error> {
+        let mut builder = Endpoint::builder();
+        if let Some(key) = &config.key {
+            builder = builder.secret_key(key.clone());
+        }
+        let alpns: Vec<Vec<u8>> = vec![echo::Protocol::ALPN.to_vec()];
+        #[cfg(feature = "sync")]
+        let alpns = {
+            let mut alpns = alpns;
+            alpns.push(sync::Protocol::ALPN.to_vec());
+            alpns
+        };
+        #[cfg(feature = "blobs")]
+        let alpns = {
+            let mut alpns = alpns;
+            alpns.push(iroh_blobs::ALPN.to_vec());
+            alpns
+        };
+
+        let endpoint = builder
+            .discovery(MdnsDiscovery::builder())
+            .alpns(alpns)
+            .relay_mode(config.relay_mode())
+            .bind()
+            .await?;
+
+        let (echo_event_sender, echo_event_receiver) = mpsc::channel(EVENT_CHANNEL_SIZE);
+        let echo = echo::Protocol::new(echo_event_sender);
+
+        #[cfg(feature = "sync")]
+        let (sync_event_sender, sync_event_receiver) = mpsc::channel(EVENT_CHANNEL_SIZE);
+        #[cfg(feature = "sync")]
+        let sync = sync::Protocol::new(sync_event_sender, sync_actor_handle.clone());
+
+        #[cfg(feature = "blobs")]
+        let (blobs, blobs_protocol) = Blobs::new(endpoint.clone());
+
+        let router_builder = Router::builder(endpoint).accept(echo::Protocol::ALPN, echo);
+        #[cfg(feature = "sync")]
+        let router_builder = router_builder.accept(sync::Protocol::ALPN, sync);
+        #[cfg(feature = "blobs")]
+        let router_builder = router_builder.accept(iroh_blobs::ALPN, blobs_protocol);
+        let router = router_builder.spawn();
+        if timeout(ENDPOINT_INIT_TIMEOUT, router.endpoint().online())
+            .await
+            .is_err()
+        {
+            return Err(Error::EndpointInitTimeout);
+        }
+        info!(
+            "Endpoint address initialized: {:?}",
+            router.endpoint().addr()
+        );
+
+        Ok(Self {
+            router,
+            #[cfg(feature = "sync")]
+            sync_actor_handle,
+            #[cfg(feature = "blobs")]
+            blobs,
+            echo_event_receiver,
+            #[cfg(feature = "sync")]
+            sync_event_receiver,
+        })
+    }
+
+    async fn shutdown(self) {
+        info!("shutting down the network actor.");
+        if let Err(e) = self.router.shutdown().await {
+            error!("error while shutting down the network router: {e:?}");
+        }
+        info!("network actor shut down.");
+    }
+
+    #[cfg(feature = "sync")]
+    async fn run_event_loop(&mut self, mut state: actman::State<Self>) {
         loop {
             tokio::select! {
                 Some(message) = state.message_receiver.recv() => {
@@ -57,6 +151,32 @@ impl actman::Actor for Actor {
                     debug!("Echo event: {event:?}");
                 }
                 Some(event) = self.sync_event_receiver.recv() => {
+                    debug!("Sync event: {event:?}");
+                }
+                else => {
+                    warn!("All channels closed, terminating actor.");
+                    break;
+                }
+            }
+        }
+    }
+
+    #[cfg(not(feature = "sync"))]
+    async fn run_event_loop(&mut self, mut state: actman::State<Self>) {
+        loop {
+            tokio::select! {
+                Some(message) = state.message_receiver.recv() => {
+                    self.handle_message(message).await
+                }
+                Some(ctrl) = state.control_receiver.recv() => {
+                    match ctrl {
+                        actman::Control::Shutdown => {
+                            info!("Actor received shutdown control.");
+                            break;
+                        },
+                    }
+                }
+                Some(event) = self.echo_event_receiver.recv() => {
                     debug!("Echo event: {event:?}");
                 }
                 else => {
@@ -65,73 +185,6 @@ impl actman::Actor for Actor {
                 }
             }
         }
-
-        self.shutdown().await;
-    }
-}
-
-const EVENT_CHANNEL_SIZE: usize = 128;
-const ENDPOINT_INIT_TIMEOUT: Duration = Duration::from_secs(10);
-
-impl Actor {
-    pub async fn new(
-        config: &Config,
-        sync_actor_handle: actman::Handle<crate::sync::Actor>,
-    ) -> Result<Self, Error> {
-        let mut builder = Endpoint::builder();
-        if let Some(key) = &config.key {
-            builder = builder.secret_key(key.clone());
-        }
-        let endpoint = builder
-            .discovery(MdnsDiscovery::builder())
-            .alpns(vec![
-                echo::Protocol::ALPN.to_vec(),
-                sync::Protocol::ALPN.to_vec(),
-                iroh_blobs::ALPN.to_vec(),
-            ])
-            .relay_mode(config.relay_mode())
-            .bind()
-            .await?;
-
-        let (echo_event_sender, echo_event_receiver) = mpsc::channel(EVENT_CHANNEL_SIZE);
-        let echo = echo::Protocol::new(echo_event_sender);
-
-        let (sync_event_sender, sync_event_receiver) = mpsc::channel(EVENT_CHANNEL_SIZE);
-        let sync = sync::Protocol::new(sync_event_sender, sync_actor_handle.clone());
-
-        let (blobs, blobs_protocol) = Blobs::new(endpoint.clone());
-
-        let router = Router::builder(endpoint)
-            .accept(echo::Protocol::ALPN, echo)
-            .accept(sync::Protocol::ALPN, sync)
-            .accept(iroh_blobs::ALPN, blobs_protocol)
-            .spawn();
-        if timeout(ENDPOINT_INIT_TIMEOUT, router.endpoint().online())
-            .await
-            .is_err()
-        {
-            return Err(Error::EndpointInitTimeout);
-        }
-        info!(
-            "Endpoint address initialized: {:?}",
-            router.endpoint().addr()
-        );
-
-        Ok(Self {
-            router,
-            sync_actor_handle,
-            blobs,
-            echo_event_receiver,
-            sync_event_receiver,
-        })
-    }
-
-    async fn shutdown(self) {
-        info!("shutting down the network actor.");
-        if let Err(e) = self.router.shutdown().await {
-            error!("error while shutting down the network router: {e:?}");
-        }
-        info!("network actor shut down.");
     }
 
     async fn handle_message(&self, message: Message) {
@@ -140,6 +193,7 @@ impl Actor {
                 node_id,
                 reply_sender,
             } => self.handle_echo_message(node_id, reply_sender).await,
+            #[cfg(feature = "sync")]
             Message::ConnectAndSync {
                 node_id,
                 doc_space,
@@ -154,6 +208,7 @@ impl Actor {
                     .send(self.router.endpoint().id())
                     .inspect_err(|e| error!("Failed to send reply: {e:?}"));
             }
+            #[cfg(feature = "blobs")]
             Message::SendFiles {
                 paths,
                 reply_sender,
@@ -163,6 +218,7 @@ impl Actor {
                     .send(result)
                     .inspect_err(|_| error!("Failed to send AddBlob reply"));
             }
+            #[cfg(feature = "blobs")]
             Message::DownloadFiles {
                 ticket,
                 save_dir,
@@ -177,6 +233,7 @@ impl Actor {
                     .send(result)
                     .inspect_err(|_| error!("Failed to send DownloadBlob reply"));
             }
+            #[cfg(feature = "blobs")]
             Message::FilesTransferCount { hash, reply_sender } => {
                 let _ = reply_sender
                     .send(self.blobs.transfer_count(hash).await)
@@ -194,6 +251,7 @@ impl Actor {
         echo::Protocol::connect_and_spawn(node_id, &self.router, reply_sender).await;
     }
 
+    #[cfg(feature = "sync")]
     async fn handle_sync_message(
         &self,
         node_id: EndpointId,
@@ -220,6 +278,7 @@ pub enum Message {
         reply_sender: oneshot::Sender<Result<(), Error>>,
     },
     // TODO: Considering a command for syncing multiple docs at once
+    #[cfg(feature = "sync")]
     ConnectAndSync {
         node_id: EndpointId,
         doc_space: DocSpace,
@@ -231,12 +290,14 @@ pub enum Message {
     },
     /// Import one or more files into the local blob store and
     /// return a shareable [`BlobTicket`].
+    #[cfg(feature = "blobs")]
     SendFiles {
         paths: Vec<PathBuf>,
         reply_sender: oneshot::Sender<Result<BlobTicket, Error>>,
     },
     /// Download the files described by `ticket` and export every contained file
     /// into `save_dir`. Returns one path per file written.
+    #[cfg(feature = "blobs")]
     DownloadFiles {
         ticket: BlobTicket,
         save_dir: PathBuf,
@@ -244,6 +305,7 @@ pub enum Message {
     },
     /// Returns how many distinct receivers have fully pulled the
     /// ticket whose hash is `hash`.
+    #[cfg(feature = "blobs")]
     FilesTransferCount {
         hash: iroh_blobs::Hash,
         reply_sender: oneshot::Sender<Option<u64>>,

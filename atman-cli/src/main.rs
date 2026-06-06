@@ -194,12 +194,14 @@ async fn handle_connect_and_sync(
     info!("Connecting to node {node_id} to sync");
     let (reply_sender, reply_receiver) = oneshot::channel();
     if let Err(e) = command_sender
-        .send(atman::Command::ConnectAndSync {
-            node_id,
-            doc_space,
-            doc_id,
-            reply_sender,
-        })
+        .send(atman::Command::Sync(
+            atman::command::sync::Command::ConnectAndSync {
+                node_id,
+                doc_space,
+                doc_id,
+                reply_sender,
+            },
+        ))
         .await
     {
         error!("Channel send error: {e}");
@@ -221,10 +223,12 @@ async fn handle_get_document(
     info!("Getting a document: {doc_space:?}/{doc_id:?}");
     let (reply_sender, reply_receiver) = oneshot::channel();
     if let Err(e) = command_sender
-        .send(atman::Command::Sync(sync_message::Message::Get {
-            msg: sync_message::GetMessage { doc_space, doc_id },
-            reply_sender,
-        }))
+        .send(atman::Command::Sync(atman::command::sync::Command::Sync(
+            Box::new(sync_message::Message::Get {
+                msg: sync_message::GetMessage { doc_space, doc_id },
+                reply_sender,
+            }),
+        )))
         .await
     {
         error!("Channel send error: {e}");
@@ -248,10 +252,12 @@ async fn handle_add_files(command_sender: &mpsc::Sender<atman::Command>, paths: 
     info!(?paths, "Adding files");
     let (reply_sender, reply_receiver) = oneshot::channel();
     if let Err(e) = command_sender
-        .send(atman::Command::SendFiles {
-            paths,
-            reply_sender,
-        })
+        .send(atman::Command::Blobs(
+            atman::command::blobs::Command::SendFiles {
+                paths,
+                reply_sender,
+            },
+        ))
         .await
     {
         error!("Channel send error: {e}");
@@ -282,11 +288,13 @@ async fn handle_download_files(
     info!(?save_dir, "Downloading files");
     let (reply_sender, reply_receiver) = oneshot::channel();
     if let Err(e) = command_sender
-        .send(atman::Command::DownloadFiles {
-            ticket,
-            save_dir,
-            reply_sender,
-        })
+        .send(atman::Command::Blobs(
+            atman::command::blobs::Command::DownloadFiles {
+                ticket,
+                save_dir,
+                reply_sender,
+            },
+        ))
         .await
     {
         error!("Channel send error: {e}");

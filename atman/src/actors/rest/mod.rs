@@ -2,23 +2,18 @@ mod error;
 
 use std::{net::SocketAddr, time::Duration};
 
-use axum::{
-    Json, Router,
-    extract::{Path, State},
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-};
+#[cfg(feature = "sync")]
+use axum::extract::Path;
+use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::oneshot, task::JoinHandle};
 use tower_http::timeout::TimeoutLayer;
 use tracing::{error, info, warn};
 
 pub use crate::actors::rest::error::Error;
-use crate::{
-    actors::{network, sync},
-    command::Status,
-};
+#[cfg(feature = "sync")]
+use crate::actors::sync;
+use crate::{actors::network, command::Status};
 
 pub struct Actor {
     server_join_handle: JoinHandle<()>,
@@ -57,6 +52,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 struct ServerState {
     network_handle: actman::Handle<network::Actor>,
+    #[cfg(feature = "sync")]
     sync_handle: actman::Handle<sync::Actor>,
 }
 
@@ -64,17 +60,19 @@ impl Actor {
     pub async fn new(
         config: &Config,
         network_handle: actman::Handle<network::Actor>,
-        sync_handle: actman::Handle<sync::Actor>,
+        #[cfg(feature = "sync")] sync_handle: actman::Handle<sync::Actor>,
     ) -> Result<Self, Error> {
-        let router = Router::new()
-            .route("/status", get(status))
-            .route("/document/{space}/{id}", get(get_document))
+        let router = Router::new().route("/status", get(status));
+        #[cfg(feature = "sync")]
+        let router = router.route("/document/{space}/{id}", get(get_document));
+        let router = router
             .layer(
                 // Necessary for graceful shutdown
                 TimeoutLayer::new(REQUEST_TIMEOUT),
             )
             .with_state(ServerState {
                 network_handle,
+                #[cfg(feature = "sync")]
                 sync_handle,
             });
         let listener = tokio::net::TcpListener::bind(config.addr)
@@ -136,6 +134,7 @@ async fn status(State(state): State<ServerState>) -> impl IntoResponse {
     Ok(Json(Status { node_id }))
 }
 
+#[cfg(feature = "sync")]
 async fn get_document(
     State(state): State<ServerState>,
     Path((space, id)): Path<(String, String)>,

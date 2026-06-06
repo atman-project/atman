@@ -1,23 +1,25 @@
-use std::{
-    ffi::{CStr, CString, c_char, c_ushort},
-    path::PathBuf,
-    str::FromStr as _,
-    time::Duration,
-};
+use std::ffi::{CStr, CString, c_char, c_ushort};
+#[cfg(any(feature = "sync", feature = "blobs"))]
+use std::path::PathBuf;
+#[cfg(any(feature = "sync", feature = "blobs"))]
+use std::str::FromStr as _;
+#[cfg(feature = "sync")]
+use std::time::Duration;
 
+#[cfg(feature = "sync")]
 use iroh::EndpointId;
 use once_cell::sync::OnceCell;
 use tokio::{
     runtime::Runtime,
     sync::{mpsc, oneshot},
 };
-use tracing::{debug, error, info};
+#[cfg(any(feature = "sync", feature = "blobs"))]
+use tracing::debug;
+use tracing::{error, info};
 
-use crate::{
-    Atman, Command, Config,
-    actors::{network, sync},
-    config::secret_key_from_hex,
-};
+#[cfg(feature = "sync")]
+use crate::actors::sync;
+use crate::{Atman, Command, Config, actors::network, config::secret_key_from_hex};
 
 static ASYNC_RUNTIME: OnceCell<Runtime> = OnceCell::new();
 static TRACING_SUBSCRIBER: OnceCell<()> = OnceCell::new();
@@ -45,8 +47,8 @@ pub unsafe extern "C" fn run_atman(
     identity: *const c_char,
     network_key: *const c_char,
     custom_relay_url: *const c_char,
-    syncman_dir: *const c_char,
-    sync_interval_secs: u64,
+    #[cfg(feature = "sync")] syncman_dir: *const c_char,
+    #[cfg(feature = "sync")] sync_interval_secs: u64,
 ) -> c_ushort {
     init_tracing_subscriber();
 
@@ -90,10 +92,12 @@ pub unsafe extern "C" fn run_atman(
         }
     };
 
+    #[cfg(feature = "sync")]
     let syncman_dir = unsafe { CStr::from_ptr(syncman_dir) }
         .to_str()
         .expect("Invalid UTF-8 string for syncman_dir")
         .to_string();
+    #[cfg(feature = "sync")]
     let sync_interval = if sync_interval_secs == 0 {
         None
     } else {
@@ -107,9 +111,11 @@ pub unsafe extern "C" fn run_atman(
             key: Some(iroh::SecretKey::from_bytes(&network_key)),
             custom_relay_url,
         },
+        #[cfg(feature = "sync")]
         sync: sync::Config {
             syncman_dir: PathBuf::from(syncman_dir),
         },
+        #[cfg(feature = "sync")]
         sync_interval,
         #[cfg(feature = "rest")]
         rest: Default::default(),
@@ -143,6 +149,7 @@ pub unsafe extern "C" fn run_atman(
 
 static COMMAND_SENDER: OnceCell<mpsc::Sender<Command>> = OnceCell::new();
 
+#[cfg(any(feature = "sync", feature = "blobs"))]
 fn send_command(cmd: Command) {
     match COMMAND_SENDER.get() {
         Some(sender) => {
@@ -163,6 +170,7 @@ fn send_command(cmd: Command) {
 /// # Safety
 /// All fields in [`ConnectAndSyncCommand`] must be valid pointers to byte
 /// arrays of the corresponding length.
+#[cfg(feature = "sync")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_connect_and_sync_command(cmd: ConnectAndSyncCommand) {
     let node_id = unsafe { std::slice::from_raw_parts(cmd.node_id, cmd.node_id_len) };
@@ -186,12 +194,14 @@ pub unsafe extern "C" fn send_atman_connect_and_sync_command(cmd: ConnectAndSync
     };
 
     let (reply_sender, reply_receiver) = oneshot::channel();
-    send_command(Command::ConnectAndSync {
-        node_id,
-        doc_space,
-        doc_id,
-        reply_sender,
-    });
+    send_command(Command::Sync(
+        crate::command::sync::Command::ConnectAndSync {
+            node_id,
+            doc_space,
+            doc_id,
+            reply_sender,
+        },
+    ));
 
     match reply_receiver.blocking_recv() {
         Ok(Ok(())) => info!("ConnectAndSync succeeded"),
@@ -200,6 +210,7 @@ pub unsafe extern "C" fn send_atman_connect_and_sync_command(cmd: ConnectAndSync
     }
 }
 
+#[cfg(feature = "sync")]
 #[repr(C)]
 pub struct ConnectAndSyncCommand {
     pub node_id: *const u8,
@@ -215,6 +226,7 @@ pub struct ConnectAndSyncCommand {
 /// # Safety
 /// All fields in [`SyncUpdateCommand`] must be valid pointers to byte arrays of
 /// the corresponding length.
+#[cfg(feature = "sync")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_sync_update_command(cmd: SyncUpdateCommand) {
     let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
@@ -235,7 +247,9 @@ pub unsafe extern "C" fn send_atman_sync_update_command(cmd: SyncUpdateCommand) 
         data: data.to_vec(),
     }
     .into();
-    send_command(Command::Sync(msg));
+    send_command(Command::Sync(crate::command::sync::Command::Sync(
+        Box::new(msg),
+    )));
 
     match reply_receiver.blocking_recv() {
         Ok(Ok(())) => info!("Sync update succeeded"),
@@ -244,6 +258,7 @@ pub unsafe extern "C" fn send_atman_sync_update_command(cmd: SyncUpdateCommand) 
     }
 }
 
+#[cfg(feature = "sync")]
 #[repr(C)]
 pub struct SyncUpdateCommand {
     pub doc_space: *const u8,
@@ -259,6 +274,7 @@ pub struct SyncUpdateCommand {
 /// # Safety
 /// All fields in [`SyncListInsertCommand`] must be valid pointers to byte
 /// arrays of the corresponding length.
+#[cfg(feature = "sync")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_sync_list_insert_command(cmd: SyncListInsertCommand) {
     let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
@@ -289,7 +305,9 @@ pub unsafe extern "C" fn send_atman_sync_list_insert_command(cmd: SyncListInsert
         index: cmd.index,
     }
     .into();
-    send_command(Command::Sync(msg));
+    send_command(Command::Sync(crate::command::sync::Command::Sync(
+        Box::new(msg),
+    )));
 
     match reply_receiver.blocking_recv() {
         Ok(Ok(())) => info!("Sync list insert succeeded"),
@@ -298,6 +316,7 @@ pub unsafe extern "C" fn send_atman_sync_list_insert_command(cmd: SyncListInsert
     }
 }
 
+#[cfg(feature = "sync")]
 #[repr(C)]
 pub struct SyncListInsertCommand {
     pub doc_space: *const u8,
@@ -320,6 +339,7 @@ pub struct SyncListInsertCommand {
 /// # Safety
 /// All fields in [`SyncGetCommand`] must be valid pointers to byte arrays of
 /// the corresponding length.
+#[cfg(feature = "sync")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_sync_get_command(cmd: SyncGetCommand) -> *mut c_char {
     let doc_space = unsafe { std::slice::from_raw_parts(cmd.doc_space, cmd.doc_space_len) };
@@ -335,7 +355,9 @@ pub unsafe extern "C" fn send_atman_sync_get_command(cmd: SyncGetCommand) -> *mu
 
     let (msg, reply_receiver) =
         crate::actors::sync::message::GetMessage { doc_space, doc_id }.into();
-    send_command(Command::Sync(msg));
+    send_command(Command::Sync(crate::command::sync::Command::Sync(
+        Box::new(msg),
+    )));
 
     match reply_receiver.blocking_recv() {
         Ok(Ok(document)) => {
@@ -363,6 +385,7 @@ pub unsafe extern "C" fn send_atman_sync_get_command(cmd: SyncGetCommand) -> *mu
     }
 }
 
+#[cfg(feature = "sync")]
 #[repr(C)]
 pub struct SyncGetCommand {
     pub doc_space: *const u8,
@@ -391,6 +414,7 @@ pub unsafe extern "C" fn free_string(str: *mut c_char) {
 ///
 /// # Safety
 /// `file_paths` must be a valid null-terminated UTF-8 C string.
+#[cfg(feature = "blobs")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_blobs_add_files_command(
     file_paths: *const c_char,
@@ -413,10 +437,10 @@ pub unsafe extern "C" fn send_atman_blobs_add_files_command(
     }
 
     let (reply_sender, reply_receiver) = oneshot::channel();
-    send_command(Command::SendFiles {
+    send_command(Command::Blobs(crate::command::blobs::Command::SendFiles {
         paths,
         reply_sender,
-    });
+    }));
 
     match reply_receiver.blocking_recv() {
         Ok(Ok(ticket)) => {
@@ -442,6 +466,7 @@ pub unsafe extern "C" fn send_atman_blobs_add_files_command(
 ///
 /// # Safety
 /// `ticket` and `save_dir` must be valid null-terminated UTF-8 C strings.
+#[cfg(feature = "blobs")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_blobs_download_files_command(
     ticket: *const c_char,
@@ -471,11 +496,13 @@ pub unsafe extern "C" fn send_atman_blobs_download_files_command(
     };
 
     let (reply_sender, reply_receiver) = oneshot::channel();
-    send_command(Command::DownloadFiles {
-        ticket,
-        save_dir,
-        reply_sender,
-    });
+    send_command(Command::Blobs(
+        crate::command::blobs::Command::DownloadFiles {
+            ticket,
+            save_dir,
+            reply_sender,
+        },
+    ));
 
     match reply_receiver.blocking_recv() {
         Ok(Ok(paths)) => {
@@ -505,6 +532,7 @@ pub unsafe extern "C" fn send_atman_blobs_download_files_command(
 ///
 /// # Safety
 /// `ticket` must be a valid null-terminated UTF-8 C string.
+#[cfg(feature = "blobs")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_atman_blobs_files_transfer_count_command(
     ticket: *const c_char,
@@ -525,10 +553,12 @@ pub unsafe extern "C" fn send_atman_blobs_files_transfer_count_command(
     };
 
     let (reply_sender, reply_receiver) = oneshot::channel();
-    send_command(Command::FilesTransferCount {
-        hash: ticket.inner.hash(),
-        reply_sender,
-    });
+    send_command(Command::Blobs(
+        crate::command::blobs::Command::FilesTransferCount {
+            hash: ticket.inner.hash(),
+            reply_sender,
+        },
+    ));
     match reply_receiver.blocking_recv() {
         Ok(count) => count.unwrap_or(0),
         Err(e) => {

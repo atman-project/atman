@@ -8,8 +8,10 @@ use tracing::{error, info};
 
 use crate::actors::network::Error;
 
+#[cfg(feature = "blobs")]
 pub mod blobs;
 pub mod echo;
+#[cfg(feature = "sync")]
 pub mod sync;
 
 /// Connect to a remote node and open a bidirectional stream.
