@@ -22,8 +22,20 @@ jobs:
       - name: Install cbindgen
         run: cargo install --force cbindgen
 
-      - name: Build bindings
+      - name: Build bindings arm64
         run: |
           cd atman
-          bash build_bindings.sh --all-features
+          bash build_bindings.sh --arm64 --all-features
           cd -
+
+      - name: Build bindings sim-arm64
+        run: |
+          cd atman
+          bash build_bindings.sh --sim-arm64 --all-features
+          cd -
+
+      - name: Build bindings x86_64
+        run: |
+          cd atman
+          bash build_bindings.sh --x86_64 --all-features
+          cd
