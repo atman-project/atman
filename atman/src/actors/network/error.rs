@@ -18,6 +18,8 @@ pub enum Error {
     UnexpectedFinishMessage,
     #[error("Invalid doc space or id: {0}")]
     InvalidDocSpaceId(#[from] std::string::FromUtf8Error),
+    #[error("Blob error: {0}")]
+    Blob(#[from] crate::actors::network::protocols::blobs::Error),
 }
 
 impl From<io::Error> for Error {

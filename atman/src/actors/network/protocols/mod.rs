@@ -8,6 +8,7 @@ use tracing::{error, info};
 
 use crate::actors::network::Error;
 
+pub mod blobs;
 pub mod echo;
 pub mod sync;
 
