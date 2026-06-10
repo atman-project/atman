@@ -17,8 +17,11 @@ use crate::{
 };
 
 mod actors;
-pub mod binding;
 pub mod command;
+pub mod uniffi_api;
+
+// Must come after `uniffi_api` so its `#[uniffi::export]` metadata is in scope.
+uniffi::setup_scaffolding!();
 pub use command::Command;
 pub mod config;
 #[cfg(feature = "sync")]
