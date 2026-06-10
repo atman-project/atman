@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use once_cell::sync::OnceCell;
 use tokio::sync::{Mutex, mpsc, oneshot};
-#[cfg(any(feature = "blobs", feature = "sync"))]
+#[cfg(feature = "sync")]
 use tracing::info;
 
 use crate::{Atman, Command, Config, actors::network, config::secret_key_from_hex};

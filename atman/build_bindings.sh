@@ -69,7 +69,7 @@ cbindgen -l C -o ${TARGET_DIR}/${PROJECT_NAME}.h
 SWIFT_OUT="${TARGET_DIR}/uniffi-bindings/swift"
 mkdir -p "${SWIFT_OUT}"
 cargo build $CARGO_FLAGS $FEATURE_FLAGS -p ${PROJECT_NAME}
-cargo run --bin uniffi-bindgen -- generate \
+cargo run -p atman-uniffi-bindgen --bin uniffi-bindgen -- generate \
     --library "${TARGET_DIR}/${BUILD_MODE}/lib${PROJECT_NAME}.dylib" \
     --language swift \
     --out-dir "${SWIFT_OUT}"
