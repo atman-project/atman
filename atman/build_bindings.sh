@@ -58,7 +58,16 @@ if ! $BUILD_ARM64 && ! $BUILD_SIM_ARM64 && ! $BUILD_X86_64; then
     exit 1
 fi
 
-cbindgen -l C -o ${TARGET_DIR}/${PROJECT_NAME}.h
+SWIFT_OUT="${TARGET_DIR}/uniffi-bindings/swift"
+mkdir -p "${SWIFT_OUT}"
+# uniffi-bindgen reads metadata from the host cdylib (not the iOS .a),
+# so we build it separately. Use `--crate-type cdylib` because the manifest
+# only emits staticlib by default — cdylib breaks iOS linking in CI.
+cargo rustc $CARGO_FLAGS $FEATURE_FLAGS -p ${PROJECT_NAME} --crate-type cdylib
+cargo run -p atman-uniffi-bindgen --bin uniffi-bindgen -- generate \
+    --library "${TARGET_DIR}/${BUILD_MODE}/lib${PROJECT_NAME}.dylib" \
+    --language swift \
+    --out-dir "${SWIFT_OUT}"
 
 LIB_NAME="lib${PROJECT_NAME}.a"
 

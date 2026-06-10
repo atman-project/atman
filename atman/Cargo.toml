@@ -10,6 +10,12 @@ readme      = { workspace = true }
 repository  = { workspace = true }
 
 [lib]
+# staticlib: iOS .a. lib: in-workspace consumers (atman-cli, tests).
+#
+# We don't add `cdylib` (.dylib / .so) here. It will be requested
+# per-build via `cargo rustc --crate-type cdylib` because emitting it
+# unconditionally breaks linking for iOS targets in CI.
+# See `build_bindings.sh` for more details.
 crate-type = ["lib", "staticlib"]
 
 [dependencies]
@@ -35,6 +41,7 @@ tokio              = { features = ["rt-multi-thread"], workspace = true }
 tower-http         = { features = ["timeout"], optional = true, version = "0.6" }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
+uniffi             = { features = ["tokio"], workspace = true }
 url                = "2"
 uuid               = { features = ["v4"], version = "1" }
 
