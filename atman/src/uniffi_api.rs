@@ -256,7 +256,8 @@ impl AtmanClient {
         Ok(())
     }
 
-    /// Insert `data` into the list at `(collection_doc_id, property)` at `index`.
+    /// Insert `data` into the list at `(collection_doc_id, property)` at
+    /// `index`.
     pub async fn sync_list_insert(
         &self,
         doc_space: String,
