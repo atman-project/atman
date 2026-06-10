@@ -1,6 +1,6 @@
 //! UniFFI surface — the Swift / Kotlin entry point.
 
-#[cfg(feature = "blobs")]
+#[cfg(any(feature = "blobs", feature = "sync"))]
 use std::path::PathBuf;
 #[cfg(any(feature = "blobs", feature = "sync"))]
 use std::str::FromStr;
