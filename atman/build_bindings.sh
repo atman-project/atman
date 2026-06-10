@@ -58,10 +58,6 @@ if ! $BUILD_ARM64 && ! $BUILD_SIM_ARM64 && ! $BUILD_X86_64; then
     exit 1
 fi
 
-# Legacy C-ABI header from `binding.rs`. Kept around until beam-ios has
-# fully migrated off the C surface and onto the UniFFI bindings below.
-cbindgen -l C -o ${TARGET_DIR}/${PROJECT_NAME}.h
-
 # UniFFI Swift bindings — `uniffi-bindgen generate --library` introspects
 # the compiled scaffolding inside the dylib, so we build a host cdylib
 # first. Output is pure Swift source (platform-independent), reused for

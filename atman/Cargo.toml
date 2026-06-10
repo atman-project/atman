@@ -11,9 +11,10 @@ repository  = { workspace = true }
 
 [lib]
 crate-type = ["cdylib", "lib", "staticlib"]
-# `cdylib` is needed for Android (JVM dlopens libatman.so) and for the
-# UniFFI scaffolding generally; `staticlib` is what iOS still links today
-# (will become optional once beam-ios migrates to UniFFI).
+# `cdylib` produces libatman.so for Android (loaded via JNA/UniFFI) and
+# libatman.dylib on host (consumed by uniffi-bindgen to introspect the
+# scaffolding). `staticlib` produces libatman.a for iOS linking. `lib`
+# keeps the crate usable from in-workspace Rust (atman-cli, tests).
 
 [dependencies]
 actman             = "0.1"

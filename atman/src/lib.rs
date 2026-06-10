@@ -17,7 +17,6 @@ use crate::{
 };
 
 mod actors;
-pub mod binding;
 pub mod command;
 pub mod uniffi_api;
 
