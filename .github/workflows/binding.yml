@@ -19,9 +19,6 @@ jobs:
       - name: Add iOS targets
         run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 
-      - name: Install cbindgen
-        run: cargo install --force cbindgen
-
       - name: Build bindings
         run: |
           cd atman
