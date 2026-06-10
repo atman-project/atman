@@ -52,7 +52,7 @@ pub struct AtmanClient {
     command_sender: Mutex<mpsc::Sender<Command>>,
 }
 
-#[uniffi::export(async_runtime = "tokio")]
+#[uniffi::export]
 impl AtmanClient {
     /// Spin up the node and block until it's ready to accept commands.
     ///
@@ -60,14 +60,23 @@ impl AtmanClient {
     /// relay set. The `sync_*` parameters only matter when the `sync`
     /// feature is enabled; pass an empty `syncman_dir` and `0` to disable
     /// the periodic-sync timer.
-    #[uniffi::constructor]
+    // `syncman_dir` and `sync_interval_secs` are always part of the FFI
+    // signature so the generated Swift/Kotlin API stays stable regardless
+    // of which Rust features the .a/.so was compiled with. When the `sync`
+    // feature is off, they're silently ignored.
+    #[uniffi::constructor(async_runtime = "tokio")]
     pub async fn new(
         identity_hex: String,
         network_key_hex: String,
         custom_relay_url: Option<String>,
-        #[cfg(feature = "sync")] syncman_dir: String,
-        #[cfg(feature = "sync")] sync_interval_secs: u64,
+        syncman_dir: String,
+        sync_interval_secs: u64,
     ) -> Result<Arc<Self>, AtmanError> {
+        #[cfg(not(feature = "sync"))]
+        {
+            let _ = &syncman_dir;
+            let _ = sync_interval_secs;
+        }
         init_tracing();
 
         let identity = secret_key_from_hex(identity_hex.as_bytes())
@@ -119,11 +128,16 @@ impl AtmanClient {
         }))
     }
 
-    // -------- Blobs --------
+    // (Blobs methods live in their own impl block below — UniFFI's
+    // proc-macro can't handle per-method `#[cfg]` gates, so we cfg-gate
+    // the whole impl. Same for sync.)
+}
 
+#[cfg(feature = "blobs")]
+#[uniffi::export(async_runtime = "tokio")]
+impl AtmanClient {
     /// Import one or more files into the blob store. Returns the shareable
     /// ticket the receiver will scan.
-    #[cfg(feature = "blobs")]
     pub async fn send_files(&self, paths: Vec<String>) -> Result<String, AtmanError> {
         let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
         let (reply_sender, reply_receiver) = oneshot::channel();
@@ -146,7 +160,6 @@ impl AtmanClient {
     /// Pull every blob `ticket` references into `save_dir`, returning each
     /// saved file's path. The caller is responsible for moving files to
     /// their final destination (gallery, downloads, etc.).
-    #[cfg(feature = "blobs")]
     pub async fn download_files(
         &self,
         ticket: String,
@@ -179,7 +192,6 @@ impl AtmanClient {
 
     /// How many distinct receivers have fully pulled `ticket`. Returns
     /// 0 if the ticket is unknown — same semantics as the legacy C-ABI.
-    #[cfg(feature = "blobs")]
     pub async fn transfer_count(&self, ticket: String) -> Result<u64, AtmanError> {
         let parsed = crate::BlobTicket::from_str(&ticket)
             .map_err(|e| AtmanError::InvalidTicket(e.to_string()))?;
@@ -201,14 +213,15 @@ impl AtmanClient {
             .unwrap_or(0))
     }
 
-    // -------- Sync --------
-    //
-    // Mirrors the four sync entry points exposed by the legacy C-ABI:
-    // connect-and-sync, sync-update, sync-list-insert, and sync-get. All
-    // are gated behind the `sync` feature, same as `binding.rs`.
+}
 
+// Mirrors the four sync entry points exposed by the legacy C-ABI:
+// connect-and-sync, sync-update, sync-list-insert, and sync-get. All
+// gated behind the `sync` feature, same as `binding.rs`.
+#[cfg(feature = "sync")]
+#[uniffi::export(async_runtime = "tokio")]
+impl AtmanClient {
     /// Connect to a remote node and sync the named doc.
-    #[cfg(feature = "sync")]
     pub async fn connect_and_sync(
         &self,
         node_id: String,
@@ -242,7 +255,6 @@ impl AtmanClient {
     /// Push a serialized update for `(doc_space, doc_id)` into the local
     /// syncman store. The receiver counterpart on a peer eventually picks
     /// it up via [`Self::connect_and_sync`].
-    #[cfg(feature = "sync")]
     pub async fn sync_update(
         &self,
         doc_space: String,
@@ -273,7 +285,6 @@ impl AtmanClient {
 
     /// Insert `data` into the list at `(collection_doc_id, property)`
     /// at position `index`. Mirrors `send_atman_sync_list_insert_command`.
-    #[cfg(feature = "sync")]
     pub async fn sync_list_insert(
         &self,
         doc_space: String,
@@ -310,7 +321,6 @@ impl AtmanClient {
 
     /// Read the document at `(doc_space, doc_id)`. Returns the JSON-
     /// serialized form, or `None` if the document is not found.
-    #[cfg(feature = "sync")]
     pub async fn sync_get(
         &self,
         doc_space: String,
