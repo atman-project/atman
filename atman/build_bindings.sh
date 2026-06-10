@@ -58,10 +58,8 @@ if ! $BUILD_ARM64 && ! $BUILD_SIM_ARM64 && ! $BUILD_X86_64; then
     exit 1
 fi
 
-# UniFFI Swift bindings — `uniffi-bindgen generate --library` introspects
-# the compiled scaffolding inside the dylib, so we build a host cdylib
-# first. Output is pure Swift source (platform-independent), reused for
-# every iOS slice.
+# uniffi-bindgen reads metadata from the host cdylib (not the iOS .a),
+# so we build it separately. Output is plain Swift, reused for every slice.
 SWIFT_OUT="${TARGET_DIR}/uniffi-bindings/swift"
 mkdir -p "${SWIFT_OUT}"
 cargo build $CARGO_FLAGS $FEATURE_FLAGS -p ${PROJECT_NAME}

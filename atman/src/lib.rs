@@ -20,9 +20,7 @@ mod actors;
 pub mod command;
 pub mod uniffi_api;
 
-// Emits the scaffolding that bridges proc-macro `#[uniffi::export]`
-// items to the bindings generator. Must come AFTER the items the
-// generator should pick up (declared via `pub mod uniffi_api`).
+// Must come after `uniffi_api` so its `#[uniffi::export]` metadata is in scope.
 uniffi::setup_scaffolding!();
 pub use command::Command;
 pub mod config;

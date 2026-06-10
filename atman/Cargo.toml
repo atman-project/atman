@@ -10,11 +10,9 @@ readme      = { workspace = true }
 repository  = { workspace = true }
 
 [lib]
+# cdylib: Android .so + host .dylib (consumed by uniffi-bindgen).
+# staticlib: iOS .a. lib: in-workspace consumers (atman-cli, tests).
 crate-type = ["cdylib", "lib", "staticlib"]
-# `cdylib` produces libatman.so for Android (loaded via JNA/UniFFI) and
-# libatman.dylib on host (consumed by uniffi-bindgen to introspect the
-# scaffolding). `staticlib` produces libatman.a for iOS linking. `lib`
-# keeps the crate usable from in-workspace Rust (atman-cli, tests).
 
 [dependencies]
 actman             = "0.1"

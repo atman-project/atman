@@ -1,9 +1,4 @@
 //! UniFFI surface — the Swift / Kotlin entry point.
-//!
-//! Lives next to the legacy [`crate::binding`] C-ABI; both compile together
-//! during the migration period so beam-ios keeps working off the C surface
-//! while beam-android wires up against UniFFI. Once both consumers move,
-//! `binding.rs` goes away.
 
 #[cfg(feature = "blobs")]
 use std::path::PathBuf;
@@ -18,9 +13,6 @@ use tracing::info;
 
 use crate::{Atman, Command, Config, actors::network, config::secret_key_from_hex};
 
-/// All errors callers see across the FFI boundary. Strings are kept short
-/// and machine-readable; richer context lives in tracing logs on the Rust
-/// side.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 #[uniffi(flat_error)]
 pub enum AtmanError {
@@ -42,13 +34,10 @@ pub enum AtmanError {
     Internal(String),
 }
 
-/// One-per-app handle to a running Atman node. Constructed once on app
-/// launch and held for the life of the process.
 #[derive(uniffi::Object)]
 pub struct AtmanClient {
-    /// Holds the mpsc::Sender for commands the Atman event loop consumes.
-    /// Wrapped in a Mutex so cloning across async calls stays sound under
-    /// UniFFI's `Arc<Self>` receiver convention.
+    // `Mutex` because UniFFI's `Arc<Self>` receiver convention rules
+    // out `&mut self` on the exported async methods.
     command_sender: Mutex<mpsc::Sender<Command>>,
 }
 
@@ -56,14 +45,9 @@ pub struct AtmanClient {
 impl AtmanClient {
     /// Spin up the node and block until it's ready to accept commands.
     ///
-    /// `custom_relay_url` is optional — passing `None` uses iroh's default
-    /// relay set. The `sync_*` parameters only matter when the `sync`
-    /// feature is enabled; pass an empty `syncman_dir` and `0` to disable
-    /// the periodic-sync timer.
-    // `syncman_dir` and `sync_interval_secs` are always part of the FFI
-    // signature so the generated Swift/Kotlin API stays stable regardless
-    // of which Rust features the .a/.so was compiled with. When the `sync`
-    // feature is off, they're silently ignored.
+    /// `sync_*` params are ignored when the `sync` feature is off; they
+    /// stay in the signature so the generated FFI surface is stable
+    /// across feature combos.
     #[uniffi::constructor(async_runtime = "tokio")]
     pub async fn new(
         identity_hex: String,
@@ -127,17 +111,15 @@ impl AtmanClient {
             command_sender: Mutex::new(command_sender),
         }))
     }
-
-    // (Blobs methods live in their own impl block below — UniFFI's
-    // proc-macro can't handle per-method `#[cfg]` gates, so we cfg-gate
-    // the whole impl. Same for sync.)
 }
+
+// `#[uniffi::export]` can't handle per-method `#[cfg]` gates, so the
+// feature-gated methods live in their own impl blocks.
 
 #[cfg(feature = "blobs")]
 #[uniffi::export(async_runtime = "tokio")]
 impl AtmanClient {
-    /// Import one or more files into the blob store. Returns the shareable
-    /// ticket the receiver will scan.
+    /// Import files into the blob store; returns a shareable ticket.
     pub async fn send_files(&self, paths: Vec<String>) -> Result<String, AtmanError> {
         let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
         let (reply_sender, reply_receiver) = oneshot::channel();
@@ -157,9 +139,7 @@ impl AtmanClient {
         Ok(ticket.to_string())
     }
 
-    /// Pull every blob `ticket` references into `save_dir`, returning each
-    /// saved file's path. The caller is responsible for moving files to
-    /// their final destination (gallery, downloads, etc.).
+    /// Pull every blob in `ticket` into `save_dir`; returns saved paths.
     pub async fn download_files(
         &self,
         ticket: String,
@@ -190,8 +170,7 @@ impl AtmanClient {
             .collect())
     }
 
-    /// How many distinct receivers have fully pulled `ticket`. Returns
-    /// 0 if the ticket is unknown — same semantics as the legacy C-ABI.
+    /// Distinct receivers that have fully pulled `ticket`; 0 if unknown.
     pub async fn transfer_count(&self, ticket: String) -> Result<u64, AtmanError> {
         let parsed = crate::BlobTicket::from_str(&ticket)
             .map_err(|e| AtmanError::InvalidTicket(e.to_string()))?;
@@ -212,12 +191,8 @@ impl AtmanClient {
             .map_err(|_| AtmanError::ChannelClosed)?
             .unwrap_or(0))
     }
-
 }
 
-// Mirrors the four sync entry points exposed by the legacy C-ABI:
-// connect-and-sync, sync-update, sync-list-insert, and sync-get. All
-// gated behind the `sync` feature, same as `binding.rs`.
 #[cfg(feature = "sync")]
 #[uniffi::export(async_runtime = "tokio")]
 impl AtmanClient {
@@ -252,9 +227,7 @@ impl AtmanClient {
         Ok(())
     }
 
-    /// Push a serialized update for `(doc_space, doc_id)` into the local
-    /// syncman store. The receiver counterpart on a peer eventually picks
-    /// it up via [`Self::connect_and_sync`].
+    /// Push a serialized update for `(doc_space, doc_id)` into local syncman.
     pub async fn sync_update(
         &self,
         doc_space: String,
@@ -283,8 +256,7 @@ impl AtmanClient {
         Ok(())
     }
 
-    /// Insert `data` into the list at `(collection_doc_id, property)`
-    /// at position `index`. Mirrors `send_atman_sync_list_insert_command`.
+    /// Insert `data` into the list at `(collection_doc_id, property)` at `index`.
     pub async fn sync_list_insert(
         &self,
         doc_space: String,
@@ -319,8 +291,7 @@ impl AtmanClient {
         Ok(())
     }
 
-    /// Read the document at `(doc_space, doc_id)`. Returns the JSON-
-    /// serialized form, or `None` if the document is not found.
+    /// Read `(doc_space, doc_id)` as JSON; `None` if not found.
     pub async fn sync_get(
         &self,
         doc_space: String,
@@ -344,8 +315,6 @@ impl AtmanClient {
             .map_err(|_| AtmanError::ChannelClosed)?
         {
             Ok(doc) => {
-                // `Document::serialize()` returns `Vec<u8>` of UTF-8 JSON;
-                // the C-ABI wraps it in CString. Surface a real String here.
                 let bytes = doc
                     .serialize()
                     .map_err(|e| AtmanError::Internal(e.to_string()))?;
@@ -354,9 +323,6 @@ impl AtmanClient {
                 Ok(Some(json))
             }
             Err(e) => {
-                // Match the legacy C-ABI: an error path returns "no
-                // document" rather than surfacing as an exception. Logged
-                // server-side so it's still observable.
                 tracing::warn!(?e, "sync_get failed; returning None");
                 Ok(None)
             }
@@ -367,9 +333,7 @@ impl AtmanClient {
 fn init_tracing() {
     static ONCE: OnceCell<()> = OnceCell::new();
     ONCE.get_or_init(|| {
-        // `try_init` keeps us from racing with any host-side subscriber
-        // the app may have already installed (e.g. tauri-plugin-log on
-        // desktop or oslog on iOS).
+        // `try_init` so we don't fight a host-side subscriber (oslog etc.).
         let _ = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::INFO)
             .with_ansi(false)
