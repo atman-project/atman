@@ -9,12 +9,17 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     name: Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --verbose --all-features
       - name: Run tests
@@ -25,20 +30,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install the latest nightly toolchain
-        uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly
-          profile: minimal
           components: rustfmt
-          override: true
       - name: Rustfmt
         run: cargo fmt --all --check
-      - name: Install taplo
-        run: cargo install taplo-cli --locked --version 0.9.3
+      - uses: uncenter/setup-taplo@v1
+        if: always()
+        with:
+          version: "0.9.3"
       - name: Run taplo fmt
+        if: always()
         run: taplo fmt --check
       - name: Run taplo lint
+        if: always()
         run: taplo lint
 
   lints:
@@ -46,6 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -62,6 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Install cargo-hack
         uses: taiki-e/install-action@cargo-hack
       - name: Check feature powerset
