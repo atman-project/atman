@@ -10,7 +10,10 @@ readme      = { workspace = true }
 repository  = { workspace = true }
 
 [lib]
-crate-type = ["lib", "staticlib"]
+crate-type = ["cdylib", "lib", "staticlib"]
+# `cdylib` is needed for Android (JVM dlopens libatman.so) and for the
+# UniFFI scaffolding generally; `staticlib` is what iOS still links today
+# (will become optional once beam-ios migrates to UniFFI).
 
 [dependencies]
 actman             = "0.1"
@@ -35,6 +38,7 @@ tokio              = { features = ["rt-multi-thread"], workspace = true }
 tower-http         = { features = ["timeout"], optional = true, version = "0.6" }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
+uniffi             = { features = ["tokio"], workspace = true }
 url                = "2"
 uuid               = { features = ["v4"], version = "1" }
 

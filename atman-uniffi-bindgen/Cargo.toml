@@ -1,0 +1,17 @@
+[package]
+name        = "atman-uniffi-bindgen"
+version     = "0.1.0"
+description = "Generates Swift and Kotlin bindings for the atman crate's UniFFI surface."
+authors     = { workspace = true }
+edition     = { workspace = true }
+homepage    = { workspace = true }
+license     = { workspace = true }
+readme      = { workspace = true }
+repository  = { workspace = true }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/main.rs"
+
+[dependencies]
+uniffi = { features = ["cli"], workspace = true }

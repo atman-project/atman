@@ -19,6 +19,12 @@ use crate::{
 mod actors;
 pub mod binding;
 pub mod command;
+pub mod uniffi_api;
+
+// Emits the scaffolding that bridges proc-macro `#[uniffi::export]`
+// items to the bindings generator. Must come AFTER the items the
+// generator should pick up (declared via `pub mod uniffi_api`).
+uniffi::setup_scaffolding!();
 pub use command::Command;
 pub mod config;
 #[cfg(feature = "sync")]
