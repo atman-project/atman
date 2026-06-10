@@ -10,9 +10,13 @@ readme      = { workspace = true }
 repository  = { workspace = true }
 
 [lib]
-# cdylib: Android .so + host .dylib (consumed by uniffi-bindgen).
 # staticlib: iOS .a. lib: in-workspace consumers (atman-cli, tests).
-crate-type = ["cdylib", "lib", "staticlib"]
+#
+# We don't add `cdylib` (.dylib / .so) here. It will be requested
+# per-build via `cargo rustc --crate-type cdylib` because emitting it
+# unconditionally breaks linking for iOS targets in CI.
+# See `build_bindings.sh` for more details.
+crate-type = ["lib", "staticlib"]
 
 [dependencies]
 actman             = "0.1"
