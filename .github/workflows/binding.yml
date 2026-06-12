@@ -15,16 +15,29 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-latest
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Add iOS targets
+        if: matrix.os == 'macos-latest'
         run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 
       - name: Add Android targets
         run: rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+
+      # Both runner images ship an NDK at $ANDROID_HOME/ndk/<version>
+      # but don't export the env var cargo-ndk reads.
+      - name: Resolve ANDROID_NDK_HOME
+        run: |
+          ndk_dir=$(ls -d $ANDROID_HOME/ndk/*/ | sort -V | tail -1)
+          echo "ANDROID_NDK_HOME=${ndk_dir%/}" >> $GITHUB_ENV
 
       - uses: taiki-e/install-action@v2
         with:
@@ -32,8 +45,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build bindings
+      # macOS can build both iOS and Android
+      - name: Build bindings on macOS
+        if: matrix.os == 'macos-latest'
         run: |
           cd atman
           bash build_bindings.sh --arm64 --sim-arm64 --x86_64 --android --all-features
+          cd -
+
+      # Linux can build only Android
+      - name: Build bindings on Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cd atman
+          bash build_bindings.sh --android --all-features
           cd -
