@@ -83,12 +83,16 @@ mkdir -p "${SWIFT_OUT}" "${KOTLIN_OUT}"
 # so we build it separately. Use `--crate-type cdylib` because the manifest
 # only emits staticlib by default — cdylib breaks iOS linking in CI.
 cargo rustc $CARGO_FLAGS $FEATURE_FLAGS -p ${PROJECT_NAME} --crate-type cdylib
+# Host cdylib extension is .dylib on macOS, .so on Linux.
+HOST_LIB_EXT="dylib"
+[[ "$(uname)" == "Linux" ]] && HOST_LIB_EXT="so"
+HOST_LIB="${TARGET_DIR}/${BUILD_MODE}/lib${PROJECT_NAME}.${HOST_LIB_EXT}"
 cargo run -p atman-uniffi-bindgen --bin uniffi-bindgen -- generate \
-    --library "${TARGET_DIR}/${BUILD_MODE}/lib${PROJECT_NAME}.dylib" \
+    --library "${HOST_LIB}" \
     --language swift \
     --out-dir "${SWIFT_OUT}"
 cargo run -p atman-uniffi-bindgen --bin uniffi-bindgen -- generate \
-    --library "${TARGET_DIR}/${BUILD_MODE}/lib${PROJECT_NAME}.dylib" \
+    --library "${HOST_LIB}" \
     --language kotlin \
     --out-dir "${KOTLIN_OUT}"
 
