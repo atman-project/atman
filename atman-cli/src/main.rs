@@ -285,14 +285,53 @@ async fn handle_download_files(
     ticket: BlobTicket,
     save_dir: PathBuf,
 ) {
+    use atman::command::blobs::DownloadProgress;
+    use indicatif::{ProgressBar, ProgressStyle};
+
     info!(?save_dir, "Downloading files");
     let (reply_sender, reply_receiver) = oneshot::channel();
+    let (progress_sender, mut progress_receiver) = mpsc::channel::<DownloadProgress>(64);
+
+    // Spinner since we don't know the total bytes upfront. The
+    // `{bytes_per_sec}` token gives a rolling rate without us tracking
+    // deltas; indicatif handles throttled rendering itself.
+    let bar = ProgressBar::new_spinner();
+    bar.set_style(
+        ProgressStyle::with_template("{spinner} Downloading… {bytes} ({bytes_per_sec})")
+            .expect("valid template"),
+    );
+    bar.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    let progress_task = tokio::spawn({
+        let bar = bar.clone();
+        async move {
+            while let Some(progress) = progress_receiver.recv().await {
+                match progress {
+                    DownloadProgress::Bytes { downloaded } => {
+                        bar.set_position(downloaded);
+                    }
+                    DownloadProgress::FetchDone {
+                        payload_bytes_read,
+                        other_bytes_read,
+                        elapsed,
+                    } => {
+                        let total = payload_bytes_read + other_bytes_read;
+                        bar.set_position(total);
+                        bar.finish_with_message(format!("fetched in {elapsed:.2?}"));
+                    }
+                    DownloadProgress::FileExported { .. } => {}
+                }
+            }
+        }
+    });
+
     if let Err(e) = command_sender
         .send(atman::Command::Blobs(
             atman::command::blobs::Command::DownloadFiles {
                 ticket,
                 save_dir,
                 reply_sender,
+                progress_sender,
             },
         ))
         .await
@@ -302,6 +341,7 @@ async fn handle_download_files(
     }
     match reply_receiver.await {
         Ok(Ok(paths)) => {
+            let _ = progress_task.await;
             println!("Saved {} file(s):", paths.len());
             for path in &paths {
                 println!("  {}", path.display());

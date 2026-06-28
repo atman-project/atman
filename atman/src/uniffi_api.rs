@@ -140,14 +140,30 @@ impl AtmanClient {
     }
 
     /// Pull every blob in `ticket` into `save_dir`; returns saved paths.
+    ///
+    /// `progress_listener` receives streaming progress events for the
+    /// transfer. Pass a no-op implementation if you don't care.
     pub async fn download_files(
         &self,
         ticket: String,
         save_dir: String,
+        progress_listener: Arc<dyn DownloadProgressListener>,
     ) -> Result<Vec<String>, AtmanError> {
         let parsed = crate::BlobTicket::from_str(&ticket)
             .map_err(|e| AtmanError::InvalidTicket(e.to_string()))?;
         let (reply_sender, reply_receiver) = oneshot::channel();
+        let (progress_sender, mut progress_receiver) =
+            mpsc::channel::<crate::command::blobs::DownloadProgress>(64);
+
+        // Forwarder: drain the mpsc receiver and hand each event to the
+        // foreign listener. Exits when the actor drops `progress_sender`
+        // (download finished or errored).
+        tokio::spawn(async move {
+            while let Some(progress) = progress_receiver.recv().await {
+                progress_listener.on_progress(progress);
+            }
+        });
+
         self.command_sender
             .lock()
             .await
@@ -156,6 +172,7 @@ impl AtmanClient {
                     ticket: parsed,
                     save_dir: PathBuf::from(save_dir),
                     reply_sender,
+                    progress_sender,
                 },
             ))
             .await
@@ -191,6 +208,16 @@ impl AtmanClient {
             .map_err(|_| AtmanError::ChannelClosed)?
             .unwrap_or(0))
     }
+}
+
+/// A progress listener for [`AtmanClient::download_files`]
+///
+/// Events fire on atman's tokio runtime, so foreign code must hop back to the
+/// main thread itself if it touches UI state.
+#[cfg(feature = "blobs")]
+#[uniffi::export(with_foreign)]
+pub trait DownloadProgressListener: Send + Sync {
+    fn on_progress(&self, progress: crate::command::blobs::DownloadProgress);
 }
 
 #[cfg(feature = "sync")]
