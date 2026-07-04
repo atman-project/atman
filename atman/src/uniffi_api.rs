@@ -158,7 +158,7 @@ impl AtmanClient {
         // Forwarder: drain the mpsc receiver and hand each event to the
         // foreign listener. Exits when the actor drops `progress_sender`
         // (download finished or errored).
-        tokio::spawn(async move {
+        let progress_forwarder = tokio::spawn(async move {
             while let Some(progress) = progress_receiver.recv().await {
                 progress_listener.on_progress(progress);
             }
@@ -181,6 +181,12 @@ impl AtmanClient {
             .await
             .map_err(|_| AtmanError::ChannelClosed)?
             .map_err(|e| AtmanError::Internal(e.to_string()))?;
+
+        // Wait for the forwarder to drain any events buffered after
+        // the download is done — so callers can rely on every
+        // `on_progress` having been delivered by the time we return.
+        let _ = progress_forwarder.await;
+
         Ok(paths
             .into_iter()
             .map(|p| p.to_string_lossy().into_owned())
@@ -367,4 +373,161 @@ fn init_tracing() {
             .with_ansi(false)
             .try_init();
     });
+}
+
+#[cfg(all(test, feature = "blobs"))]
+mod tests {
+    use std::{sync::Mutex as StdMutex, time::Duration};
+
+    use tempfile::TempDir;
+    use tokio::time::timeout;
+
+    use super::*;
+    use crate::command::blobs::DownloadProgress;
+
+    const TEST_DEADLINE: Duration = Duration::from_secs(30);
+
+    const SENDER_IDENTITY: &str =
+        "0101010101010101010101010101010101010101010101010101010101010101";
+    const RECEIVER_IDENTITY: &str =
+        "0202020202020202020202020202020202020202020202020202020202020202";
+    const SENDER_NETWORK_KEY: &str =
+        "0303030303030303030303030303030303030303030303030303030303030303";
+    const RECEIVER_NETWORK_KEY: &str =
+        "0404040404040404040404040404040404040404040404040404040404040404";
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn send_and_download_files_via_uniffi() {
+        let sender_syncman = tempfile::tempdir().unwrap();
+        let sender = spawn_client(SENDER_IDENTITY, SENDER_NETWORK_KEY, &sender_syncman).await;
+
+        let src_dir = tempfile::tempdir().unwrap();
+        let src_file = src_dir.path().join("greeting.txt");
+        let body = b"hello atman via UniFFI!".as_slice();
+        tokio::fs::write(&src_file, body).await.unwrap();
+
+        let ticket = timeout(
+            TEST_DEADLINE,
+            sender.send_files(vec![src_file.to_string_lossy().into_owned()]),
+        )
+        .await
+        .expect("send_files should complete before deadline")
+        .expect("send_files should succeed");
+
+        let receiver_syncman = tempfile::tempdir().unwrap();
+        let receiver =
+            spawn_client(RECEIVER_IDENTITY, RECEIVER_NETWORK_KEY, &receiver_syncman).await;
+
+        let listener = Arc::new(CollectingListener {
+            events: StdMutex::new(Vec::new()),
+        });
+        let save_dir = tempfile::tempdir().unwrap();
+        let saved = timeout(
+            TEST_DEADLINE,
+            receiver.download_files(
+                ticket.clone(),
+                save_dir.path().to_string_lossy().into_owned(),
+                listener.clone(),
+            ),
+        )
+        .await
+        .expect("download_files should complete before deadline")
+        .expect("download_files should succeed");
+
+        assert_eq!(saved.len(), 1);
+        assert!(
+            saved[0].ends_with("greeting.txt"),
+            "unexpected path: {}",
+            saved[0]
+        );
+        let bytes = tokio::fs::read(&saved[0]).await.unwrap();
+        assert_eq!(bytes, body);
+
+        // `download_files` awaits its own forwarder before returning, so
+        // every event is already in the listener by the time we're here.
+        assert_single_file_progress(&listener.events.lock().unwrap(), "greeting.txt", body.len());
+    }
+
+    /// Assert the progress event sequence for a single-file download: one or
+    /// more `Bytes` (monotonically increasing), then exactly one `FetchDone`,
+    /// then exactly one `FileExported`, and nothing after that.
+    fn assert_single_file_progress(
+        events: &[DownloadProgress],
+        expected_filename: &str,
+        min_payload_bytes: usize,
+    ) {
+        let mut iter = events.iter();
+        let mut last_downloaded = 0u64;
+        let mut bytes_count = 0usize;
+        for event in iter.by_ref() {
+            match event {
+                DownloadProgress::Bytes { downloaded } => {
+                    assert!(
+                        *downloaded >= last_downloaded,
+                        "Bytes must be monotonically increasing: {downloaded} < {last_downloaded}"
+                    );
+                    last_downloaded = *downloaded;
+                    bytes_count += 1;
+                }
+                DownloadProgress::FetchDone {
+                    payload_bytes_read, ..
+                } => {
+                    assert!(bytes_count > 0, "FetchDone before any Bytes: {events:?}");
+                    assert!(
+                        *payload_bytes_read as usize >= min_payload_bytes,
+                        "FetchDone payload_bytes_read ({payload_bytes_read}) smaller than min ({min_payload_bytes})"
+                    );
+                    break;
+                }
+                DownloadProgress::FileExported { .. } => {
+                    panic!("FileExported before FetchDone: {events:?}");
+                }
+            }
+        }
+        match iter.next() {
+            Some(DownloadProgress::FileExported { path }) => {
+                assert!(
+                    path.ends_with(expected_filename),
+                    "expected path ending in {expected_filename}, got {path}"
+                );
+            }
+            other => panic!("expected FileExported after FetchDone, got: {other:?}"),
+        }
+        assert!(
+            iter.next().is_none(),
+            "unexpected trailing event: {events:?}"
+        );
+    }
+
+    /// A [`DownloadProgressListener`] that records every event it sees, so the
+    /// test can assert on the full sequence after `download_files` returns.
+    struct CollectingListener {
+        events: StdMutex<Vec<DownloadProgress>>,
+    }
+
+    impl DownloadProgressListener for CollectingListener {
+        fn on_progress(&self, progress: DownloadProgress) {
+            self.events.lock().unwrap().push(progress);
+        }
+    }
+
+    async fn spawn_client(
+        identity: &str,
+        network_key: &str,
+        syncman_dir: &TempDir,
+    ) -> Arc<AtmanClient> {
+        timeout(
+            TEST_DEADLINE,
+            AtmanClient::new(
+                identity.to_string(),
+                network_key.to_string(),
+                None,
+                syncman_dir.path().to_string_lossy().into_owned(),
+                0,
+            ),
+        )
+        .await
+        .expect("AtmanClient::new should complete before deadline")
+        .expect("AtmanClient::new should succeed")
+    }
 }
