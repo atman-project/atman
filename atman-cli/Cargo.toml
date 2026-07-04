@@ -17,6 +17,7 @@ path = "src/main.rs"
 atman              = { features = ["blobs", "rest", "sync"], path = "../atman" }
 clap               = { features = ["derive"], version = "4" }
 humantime          = "2"
+indicatif          = "0.17"
 iroh               = { workspace = true }
 qrcode             = "0.14"
 serde_json         = { workspace = true }

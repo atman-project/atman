@@ -23,9 +23,11 @@ use std::{
     sync::Arc,
 };
 
+use futures_lite::StreamExt;
 use iroh::Endpoint;
 use iroh_blobs::{
     BlobFormat, BlobsProtocol, Hash,
+    api::remote::GetProgressItem,
     format::collection::Collection,
     provider::events::{
         ConnectMode, EventMask, EventSender, ProviderMessage, RequestMode, RequestUpdate,
@@ -34,8 +36,10 @@ use iroh_blobs::{
     ticket::BlobTicket as IrohBlobTicket,
 };
 use ticket::BlobTicket;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use tracing::debug;
+
+use crate::command::blobs::DownloadProgress;
 
 #[derive(Debug)]
 pub struct Blobs {
@@ -156,6 +160,7 @@ impl Blobs {
         &self,
         ticket: BlobTicket,
         save_dir: PathBuf,
+        progress: mpsc::Sender<DownloadProgress>,
     ) -> Result<Vec<PathBuf>, Error> {
         tokio::fs::create_dir_all(&save_dir)
             .await
@@ -169,26 +174,49 @@ impl Blobs {
             .await
             .map_err(|e| Error::Blob(e.to_string()))?;
 
-        // Fetch blobs from the sender
-        self.store
-            .remote()
-            .fetch(conn, ticket.inner.hash_and_format())
-            .complete()
-            .await
-            .map_err(|e| Error::Blob(e.to_string()))?;
+        // Stream the fetch instead of using `.complete()`, so we can forward progress
+        // events.
+        let mut stream = Box::pin(
+            self.store
+                .remote()
+                .fetch(conn, ticket.inner.hash_and_format())
+                .stream(),
+        );
+        while let Some(item) = stream.next().await {
+            match item {
+                GetProgressItem::Progress(downloaded) => {
+                    let _ = progress.send(DownloadProgress::Bytes { downloaded }).await;
+                }
+                GetProgressItem::Done(stats) => {
+                    let _ = progress
+                        .send(DownloadProgress::FetchDone {
+                            payload_bytes_read: stats.counters.payload_bytes_read,
+                            other_bytes_read: stats.counters.other_bytes_read,
+                            elapsed: stats.elapsed,
+                        })
+                        .await;
+                }
+                GetProgressItem::Error(e) => return Err(Error::Blob(e.to_string())),
+            }
+        }
 
         match ticket.inner.format() {
-            BlobFormat::Raw => self
-                .export_single(&ticket, &save_dir)
-                .await
-                .map(|p| vec![p]),
-            BlobFormat::HashSeq => self.export_collection(&ticket, &save_dir).await,
+            BlobFormat::Raw => Ok(vec![
+                self.export_single(&ticket, &save_dir, &progress).await?,
+            ]),
+            BlobFormat::HashSeq => self.export_collection(&ticket, &save_dir, &progress).await,
         }
     }
 
     /// Exports a single raw blob fetched from the sender into `save_dir`.
     /// Returns the on-disk path of the saved file.
-    async fn export_single(&self, ticket: &BlobTicket, save_dir: &Path) -> Result<PathBuf, Error> {
+    async fn export_single(
+        &self,
+        ticket: &BlobTicket,
+        save_dir: &Path,
+
+        progress: &mpsc::Sender<DownloadProgress>,
+    ) -> Result<PathBuf, Error> {
         let filename = ticket
             .filenames
             .first()
@@ -200,6 +228,11 @@ impl Blobs {
             .export(ticket.inner.hash(), &path)
             .await
             .map_err(|e| Error::Blob(e.to_string()))?;
+        let _ = progress
+            .send(DownloadProgress::FileExported {
+                path: path.to_string_lossy().into_owned(),
+            })
+            .await;
         Ok(path)
     }
 
@@ -207,6 +240,7 @@ impl Blobs {
         &self,
         ticket: &BlobTicket,
         save_dir: &Path,
+        progress: &mpsc::Sender<DownloadProgress>,
     ) -> Result<Vec<PathBuf>, Error> {
         // Read the Collection manifest from our local store (it just got
         // downloaded by the call above). We don't trust the ticket's
@@ -227,6 +261,11 @@ impl Blobs {
                 .export(*hash, &path)
                 .await
                 .map_err(|e| Error::Blob(e.to_string()))?;
+            let _ = progress
+                .send(DownloadProgress::FileExported {
+                    path: path.to_string_lossy().into_owned(),
+                })
+                .await;
             saved.push(path);
         }
         Ok(saved)
@@ -324,9 +363,10 @@ mod tests {
 
         let parsed: BlobTicket = ticket.to_string().parse().unwrap();
         let save_dir = tempfile::tempdir().unwrap();
+        let (progress_tx, mut progress_rx) = mpsc::channel(64);
         let saved = timeout(
             TEST_DEADLINE,
-            receiver.download(parsed, save_dir.path().to_path_buf()),
+            receiver.download(parsed, save_dir.path().to_path_buf(), progress_tx),
         )
         .await
         .unwrap()
@@ -336,6 +376,39 @@ mod tests {
         assert_eq!(saved[0].file_name().unwrap(), "greeting.txt");
         let received = tokio::fs::read(&saved[0]).await.unwrap();
         assert_eq!(received, body);
+
+        // The sender side of the progress channel was dropped when
+        // `download` returned, so this drain terminates promptly.
+        let mut fetch_done_count = 0;
+        let mut file_exported_count = 0;
+        let mut last_downloaded = 0u64;
+        while let Some(event) = progress_rx.recv().await {
+            match event {
+                DownloadProgress::Bytes { downloaded } => {
+                    assert!(
+                        downloaded >= last_downloaded,
+                        "Bytes count must monotonically increase: {downloaded} < {last_downloaded}"
+                    );
+                    last_downloaded = downloaded;
+                }
+                DownloadProgress::FetchDone {
+                    payload_bytes_read, ..
+                } => {
+                    assert!(
+                        payload_bytes_read as usize >= body.len(),
+                        "FetchDone payload_bytes_read ({payload_bytes_read}) smaller than body ({})",
+                        body.len()
+                    );
+                    fetch_done_count += 1;
+                }
+                DownloadProgress::FileExported { path } => {
+                    assert!(path.ends_with("greeting.txt"), "unexpected path: {path}");
+                    file_exported_count += 1;
+                }
+            }
+        }
+        assert_eq!(fetch_done_count, 1, "exactly one FetchDone expected");
+        assert_eq!(file_exported_count, 1, "exactly one FileExported expected");
 
         // Wait briefly for the serve-side event task to observe the
         // request stream closing — it runs on a separate tokio task so a
@@ -382,9 +455,10 @@ mod tests {
 
         let parsed: BlobTicket = ticket.to_string().parse().unwrap();
         let save_dir = tempfile::tempdir().unwrap();
+        let (progress_tx, mut progress_rx) = mpsc::channel(64);
         let saved = timeout(
             TEST_DEADLINE,
-            receiver.download(parsed, save_dir.path().to_path_buf()),
+            receiver.download(parsed, save_dir.path().to_path_buf(), progress_tx),
         )
         .await
         .unwrap()
@@ -395,6 +469,36 @@ mod tests {
             assert_eq!(got.file_name().unwrap().to_str().unwrap(), *name);
             let received = tokio::fs::read(got).await.unwrap();
             assert_eq!(&received[..], *body);
+        }
+
+        let mut fetch_done_count = 0;
+        let mut exported = Vec::new();
+        let mut last_downloaded = 0u64;
+        while let Some(event) = progress_rx.recv().await {
+            match event {
+                DownloadProgress::Bytes { downloaded } => {
+                    assert!(
+                        downloaded >= last_downloaded,
+                        "Bytes count must monotonically increase: {downloaded} < {last_downloaded}"
+                    );
+                    last_downloaded = downloaded;
+                }
+                DownloadProgress::FetchDone { .. } => fetch_done_count += 1,
+                DownloadProgress::FileExported { path } => exported.push(path),
+            }
+        }
+        assert_eq!(fetch_done_count, 1, "exactly one FetchDone expected");
+        assert_eq!(
+            exported.len(),
+            3,
+            "one FileExported per file in the collection"
+        );
+        // Order should match the collection iteration order.
+        for ((name, _), got) in bodies.iter().zip(&exported) {
+            assert!(
+                got.ends_with(*name),
+                "expected path ending in {name}, got {got}"
+            );
         }
     }
 

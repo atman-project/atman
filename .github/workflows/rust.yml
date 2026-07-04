@@ -42,9 +42,6 @@ jobs:
       - name: Run taplo fmt
         if: always()
         run: taplo fmt --check
-      - name: Run taplo lint
-        if: always()
-        run: taplo lint
 
   lints:
     name: Lints

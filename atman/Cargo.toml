@@ -26,6 +26,7 @@ autosurgeon        = { features = ["uuid"], optional = true, version = "0.8" }
 axum               = { optional = true, version = "0.8" }
 data-encoding      = "2"
 ed25519-dalek      = { features = ["serde", "signature"], version = "2" }
+futures-lite       = "2"
 hex                = "0.4"
 humantime-serde    = "1"
 iroh               = { features = ["discovery-local-network"], workspace = true }

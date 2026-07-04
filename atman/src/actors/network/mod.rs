@@ -223,10 +223,11 @@ impl Actor {
                 ticket,
                 save_dir,
                 reply_sender,
+                progress_sender,
             } => {
                 let result = self
                     .blobs
-                    .download(ticket, save_dir)
+                    .download(ticket, save_dir, progress_sender)
                     .await
                     .map_err(Error::from);
                 let _ = reply_sender
@@ -296,12 +297,14 @@ pub enum Message {
         reply_sender: oneshot::Sender<Result<BlobTicket, Error>>,
     },
     /// Download the files described by `ticket` and export every contained file
-    /// into `save_dir`. Returns one path per file written.
+    /// into `save_dir`. Returns one path per file written. Streaming
+    /// progress is reported via `progress_sender`.
     #[cfg(feature = "blobs")]
     DownloadFiles {
         ticket: BlobTicket,
         save_dir: PathBuf,
         reply_sender: oneshot::Sender<Result<Vec<PathBuf>, Error>>,
+        progress_sender: mpsc::Sender<crate::command::blobs::DownloadProgress>,
     },
     /// Returns how many distinct receivers have fully pulled the
     /// ticket whose hash is `hash`.
