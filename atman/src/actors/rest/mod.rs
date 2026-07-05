@@ -68,7 +68,7 @@ impl Actor {
         let router = router
             .layer(
                 // Necessary for graceful shutdown
-                TimeoutLayer::new(REQUEST_TIMEOUT),
+                TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, REQUEST_TIMEOUT),
             )
             .with_state(ServerState {
                 network_handle,

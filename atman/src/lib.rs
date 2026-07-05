@@ -165,5 +165,7 @@ impl Atman {
                 break;
             }
         }
+
+        runner.shutdown().await;
     }
 }
