@@ -503,7 +503,10 @@ mod tests {
     }
 
     async fn build_endpoint() -> (Endpoint, Blobs, Router) {
-        let endpoint = Endpoint::builder().bind().await.unwrap();
+        let endpoint = Endpoint::builder(iroh::endpoint::presets::N0)
+            .bind()
+            .await
+            .unwrap();
         let (manager, proto) = Blobs::new(endpoint.clone());
         let router = Router::builder(endpoint.clone())
             .accept(iroh_blobs::ALPN, proto)

@@ -6,9 +6,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use iroh::{
-    Endpoint, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey, discovery::mdns::MdnsDiscovery,
+    Endpoint, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey, endpoint::presets,
     protocol::Router,
 };
+use iroh_mdns_address_lookup::MdnsAddressLookup;
 use serde::{Deserialize, Serialize};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -59,7 +60,7 @@ impl Actor {
         config: &Config,
         #[cfg(feature = "sync")] sync_actor_handle: actman::Handle<crate::actors::sync::Actor>,
     ) -> Result<Self, Error> {
-        let mut builder = Endpoint::builder();
+        let mut builder = Endpoint::builder(presets::N0);
         if let Some(key) = &config.key {
             builder = builder.secret_key(key.clone());
         }
@@ -78,7 +79,7 @@ impl Actor {
         };
 
         let endpoint = builder
-            .discovery(MdnsDiscovery::builder())
+            .address_lookup(MdnsAddressLookup::builder())
             .alpns(alpns)
             .relay_mode(config.relay_mode())
             .bind()
