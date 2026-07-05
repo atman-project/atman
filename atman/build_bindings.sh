@@ -119,15 +119,17 @@ fi
 # Android: cargo-ndk wraps cargo with the NDK linker + sysroot. Needs
 # `cargo install cargo-ndk` and `ANDROID_NDK_HOME` set.
 SO_NAME="lib${PROJECT_NAME}.so"
+# Play Console requires 16KiB alignment.
+ANDROID_LINK_FLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
 
 if $BUILD_ANDROID_ARM64; then
-    cargo ndk -t arm64-v8a rustc $CARGO_FLAGS $FEATURE_FLAGS -p ${PROJECT_NAME} --crate-type cdylib
+    cargo ndk -t arm64-v8a rustc $CARGO_FLAGS $FEATURE_FLAGS -p ${PROJECT_NAME} --crate-type cdylib -- $ANDROID_LINK_FLAGS
 fi
 if $BUILD_ANDROID_ARMV7; then
-    cargo ndk -t armeabi-v7a rustc $CARGO_FLAGS $FEATURE_FLAGS -p ${PROJECT_NAME} --crate-type cdylib
+    cargo ndk -t armeabi-v7a rustc $CARGO_FLAGS $FEATURE_FLAGS -p ${PROJECT_NAME} --crate-type cdylib -- $ANDROID_LINK_FLAGS
 fi
 if $BUILD_ANDROID_X86_64; then
-    cargo ndk -t x86_64 rustc $CARGO_FLAGS $FEATURE_FLAGS -p ${PROJECT_NAME} --crate-type cdylib
+    cargo ndk -t x86_64 rustc $CARGO_FLAGS $FEATURE_FLAGS -p ${PROJECT_NAME} --crate-type cdylib -- $ANDROID_LINK_FLAGS
 fi
 
 # Print results
