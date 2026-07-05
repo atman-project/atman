@@ -223,17 +223,19 @@ impl Actor {
             Message::DownloadFiles {
                 ticket,
                 save_dir,
-                reply_sender,
+                mut reply_sender,
                 progress_sender,
             } => {
-                let result = self
-                    .blobs
-                    .download(ticket, save_dir, progress_sender)
-                    .await
-                    .map_err(Error::from);
-                let _ = reply_sender
-                    .send(result)
-                    .inspect_err(|_| error!("Failed to send DownloadBlob reply"));
+                tokio::select! {
+                    result = self.blobs.download(ticket, save_dir, progress_sender) => {
+                        let _ = reply_sender
+                            .send(result.map_err(Error::from))
+                            .inspect_err(|_| error!("Failed to send DownloadBlob reply"));
+                    }
+                    _ = reply_sender.closed() => {
+                        debug!("DownloadFiles caller went away; cancelling fetch");
+                    }
+                }
             }
             #[cfg(feature = "blobs")]
             Message::FilesTransferCount { hash, reply_sender } => {
